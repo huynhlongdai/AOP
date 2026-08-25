@@ -132,3 +132,6 @@ jobs:
 
       - name: Validate verified organizational reporting against PostgreSQL
         run: pnpm exec vitest run packages/database/src/reporting-store.integration.test.ts
+
+      - name: Validate exact Context Manifest compilation against PostgreSQL
+        run: pnpm exec vitest run packages/database/src/context-manifest-store.integration.test.ts
