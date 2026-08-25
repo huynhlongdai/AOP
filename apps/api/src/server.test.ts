@@ -12,6 +12,7 @@ import { buildApiServer } from "./server.js";
 
 const ULID = "00000000000000000000000000";
 const organizationId = `org_${ULID}` as OrganizationId;
+const missingOrganizationId = "org_00000000000000000000000001" as OrganizationId;
 const taskId = `tsk_${ULID}` as const;
 
 const snapshot: OrganizationSnapshot = {
@@ -124,6 +125,15 @@ describe("observer API", () => {
     });
     expect(response.statusCode).toBe(400);
     expect(response.json()).toMatchObject({ error: "validation_error" });
+  });
+
+  it("returns 404 for a valid but missing organization on list routes", async () => {
+    const response = await createServer().inject({
+      method: "GET",
+      url: `/organizations/${missingOrganizationId}/events?after=0`,
+    });
+    expect(response.statusCode).toBe(404);
+    expect(response.json()).toMatchObject({ error: "not_found" });
   });
 
   it("returns 404 for a missing task instead of leaking an empty detail object", async () => {
