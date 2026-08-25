@@ -5,7 +5,6 @@ import {
   TaskRunSchema,
   TaskSchema,
   type AgentId,
-  type ArtifactVersionId,
   type CommandEnvelope,
   type Lease,
   type OrganizationId,
@@ -25,10 +24,6 @@ export interface TaskClaimAgentProfile {
 export interface TaskClaimTransaction extends CommandTransaction {
   lockTask(organizationId: OrganizationId, taskId: TaskId): Promise<Task | undefined>;
   hardDependencyBlockers(organizationId: OrganizationId, taskId: TaskId): Promise<readonly TaskId[]>;
-  staleRequiredArtifactInputs(
-    organizationId: OrganizationId,
-    taskId: TaskId,
-  ): Promise<readonly ArtifactVersionId[]>;
   getAgentSchedulingProfile(organizationId: OrganizationId, agentId: AgentId): Promise<TaskClaimAgentProfile | undefined>;
   nextTaskAttempt(organizationId: OrganizationId, taskId: TaskId): Promise<number>;
   persistTaskClaim(task: Task, run: TaskRun, lease: Lease): Promise<void>;
@@ -39,7 +34,6 @@ function taskClaimTransaction(transaction: CommandTransaction): TaskClaimTransac
   if (
     typeof candidate.lockTask !== "function" ||
     typeof candidate.hardDependencyBlockers !== "function" ||
-    typeof candidate.staleRequiredArtifactInputs !== "function" ||
     typeof candidate.getAgentSchedulingProfile !== "function" ||
     typeof candidate.nextTaskAttempt !== "function" ||
     typeof candidate.persistTaskClaim !== "function"
@@ -102,13 +96,6 @@ export class TaskClaimHandler implements CommandHandler {
     const blockers = await tx.hardDependencyBlockers(command.organizationId, taskId);
     if (blockers.length > 0) {
       throw new DomainError("invariant_violation", "Task has incomplete hard dependencies", { blockerTaskIds: blockers });
-    }
-
-    const staleInputs = await tx.staleRequiredArtifactInputs(command.organizationId, taskId);
-    if (staleInputs.length > 0) {
-      throw new DomainError("invariant_violation", "Task has stale required Artifact inputs", {
-        staleArtifactVersionIds: [...staleInputs],
-      });
     }
 
     const agent = await tx.getAgentSchedulingProfile(command.organizationId, payload.data.agentId);
