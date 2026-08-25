@@ -126,3 +126,6 @@ jobs:
 
       - name: Validate Task QA review lifecycle against PostgreSQL
         run: pnpm exec vitest run packages/database/src/task-review.integration.test.ts
+
+      - name: Validate Decision authority and supersession against PostgreSQL
+        run: pnpm exec vitest run packages/database/src/decision-governance.integration.test.ts
