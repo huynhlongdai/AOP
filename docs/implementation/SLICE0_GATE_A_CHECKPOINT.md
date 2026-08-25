@@ -1,7 +1,7 @@
 # Slice 0 — Gate A Kernel Correctness Checkpoint
 
 Date: 2026-08-25
-Status: PASS pending external code review
+Status: **PASS — reviewed and CI validated**
 
 ## Gate definition
 
@@ -40,9 +40,13 @@ Slice 0 engineering tickets completed:
 - T0016 — Command Gateway
 - T0017 — Integration / concurrency tests
 
+A post-implementation integrity migration was also added:
+
+- `0004_integrity_hardening.sql`
+
 ## Evidence 1 — Workspace CI
 
-GitHub Actions run #44 passed:
+GitHub Actions run #44 passed the initial Command Gateway test set:
 
 - dependency install
 - Biome lint
@@ -56,9 +60,13 @@ Commit validated:
 
 ## Evidence 2 — PostgreSQL runtime validation
 
-GitHub Actions run #46 passed both jobs.
+GitHub Actions run #46 established the initial database runtime gate using PostgreSQL 18.6.
 
-Workspace job:
+Later internal review hardened DB/protocol invariants and GitHub Actions run #57 passed both jobs again.
+
+Run #57 validates:
+
+### Workspace
 
 - install PASS
 - lint PASS
@@ -66,22 +74,21 @@ Workspace job:
 - tests PASS
 - build PASS
 
-Database job using PostgreSQL 18.6:
+### PostgreSQL
 
-- service startup PASS
-- migrations `0001 -> 0002 -> 0003` PASS
+- PostgreSQL 18.6 service PASS
+- migrations `0001 -> 0002 -> 0003 -> 0004` PASS
 - Slice 0 constraint suite PASS
-
-Commit validated:
-
-`c562a6ed8f2bce552d805a5fbfefa76d76ba3632`
 
 Constraint suite verifies at minimum:
 
 - cross-organization Goal/Task reference rejection
 - only one active Lease per Task/Run
+- Lease identity must match the exact TaskRun Task + Agent + attempt
+- superseded Decision must preserve authoritative approval history
+- passing Review requires evidence
 - ordered Event sequence uniqueness
-- all migrations can execute on a clean database
+- all migrations execute on a clean database
 
 ## Evidence 3 — Command atomicity / concurrency
 
@@ -96,26 +103,66 @@ T0017 verifies:
 - domain failure after partial mutation -> full rollback
 - unexpected failure -> full rollback and retryable error
 
-## Important implementation discovery
+## Important implementation discoveries
 
-T0016 initially caught Domain errors within the mutation transaction. T0017 design exposed that this could permit partial state to commit.
+### Finding A — Domain failure atomicity
 
-The gateway was corrected so deterministic domain failures roll back the mutation transaction first, then persist the rejection in a separate transaction.
+The first T0016 gateway version caught Domain errors within the mutation transaction. T0017 design exposed that this could permit partial state to commit.
 
-This is now part of the Kernel invariant set.
+Fix:
+
+- deterministic domain failures escape and roll back the mutation transaction first
+- rejection is persisted only afterward in a separate clean transaction
+
+### Finding B — Lease / TaskRun identity hole
+
+Internal review found that independent FKs from Lease to Task, Run and Agent did not prove the referenced Run belonged to the same Task + Agent + attempt.
+
+Fix:
+
+- TaskRun now exposes a composite lease identity key
+- Lease uses a composite FK `(organization, run, task, agent, attempt)`
+- a negative PostgreSQL test proves mismatch rejection
+
+### Finding C — Truth protocol / DB semantic drift
+
+Internal review found three schema drifts:
+
+- superseded Decisions could lose approval history
+- passing Reviews could parse without evidence
+- expired/cancelled Approval objects could contain decision metadata in protocol while DB rejected it
+
+Fix:
+
+- Protocol schemas were tightened
+- `0004_integrity_hardening.sql` aligns durable DB constraints
+- protocol and PostgreSQL negative tests were added
+
+## Review status
+
+PR #2 was moved from Draft to Ready for Review.
+
+Automated external review was attempted but unavailable for non-code reasons:
+
+- Copilot PR reviewer reported quota exhaustion
+- CodeRabbit skipped review because the PR contained 123 files, above its 100-file review limit
+
+Because neither service produced code findings, an explicit internal invariant/security review was performed over the highest-risk surfaces: Command Gateway, Policy Engine, Task state machine, truth lifecycles, Task/Run/Lease constraints and Event/Outbox persistence model.
+
+That internal review found the Lease identity and truth-schema issues above, both fixed and revalidated by CI.
 
 ## Gate result
 
-**Gate A technical evidence: PASS.**
+**Gate A technical result: PASS.**
 
-The branch should now leave Draft status for external/code-review feedback. Review findings may still require fixes before merge, but no known deterministic Kernel blocker remains.
+No known deterministic Kernel blocker remains for Slice 0.
 
-## Next phase after review/merge
+This does **not** authorize connecting a real LLM/runtime yet. The master plan still requires later coordination, governance and Intelligence Boundary gates before model execution is trusted.
 
-Slice 1 begins with:
+## Next phase
+
+Slice 1 begins after merge with:
 
 - T0018 — Query Snapshot API
 - T0019 — Outbox worker
 - T0020 — Scheduler / readiness / lease coordination
-
-A real LLM/runtime remains prohibited until later Intelligence Boundary gates are reached.
