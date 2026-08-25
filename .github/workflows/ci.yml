@@ -129,3 +129,6 @@ jobs:
 
       - name: Validate Decision authority and supersession against PostgreSQL
         run: pnpm exec vitest run packages/database/src/decision-governance.integration.test.ts
+
+      - name: Validate verified organizational reporting against PostgreSQL
+        run: pnpm exec vitest run packages/database/src/reporting-store.integration.test.ts
