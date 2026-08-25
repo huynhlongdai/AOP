@@ -4,8 +4,8 @@ BEGIN;
 
 DO $$
 BEGIN
-  IF (SELECT count(*) FROM aop.schema_migrations) <> 3 THEN
-    RAISE EXCEPTION 'expected 3 applied migrations';
+  IF (SELECT count(*) FROM aop.schema_migrations) <> 4 THEN
+    RAISE EXCEPTION 'expected 4 applied migrations';
   END IF;
 END $$;
 
@@ -178,6 +178,65 @@ BEGIN
     RAISE EXCEPTION 'lease with mismatched TaskRun attempt was incorrectly accepted';
   EXCEPTION
     WHEN foreign_key_violation THEN NULL;
+  END;
+END $$;
+
+DO $$
+BEGIN
+  BEGIN
+    INSERT INTO aop.decisions (
+      id, organization_id, scope, question, options, selected_option_id, rationale,
+      proposed_by_type, proposed_by_id, authority_capability, status,
+      approved_by_type, approved_by_id, effective_at, revision, created_at, updated_at
+    ) VALUES (
+      'dec_00000000000000000000000001',
+      'org_00000000000000000000000001',
+      'engineering.architecture',
+      'Which contract is authoritative?',
+      '[{"id":"v4","label":"v4"}]'::jsonb,
+      'v4',
+      'Validated rationale',
+      'human',
+      'usr_00000000000000000000000001',
+      'decision.engineering.approve',
+      'superseded',
+      NULL,
+      NULL,
+      NULL,
+      2,
+      now(),
+      now()
+    );
+    RAISE EXCEPTION 'superseded decision without approval history was incorrectly accepted';
+  EXCEPTION
+    WHEN check_violation THEN NULL;
+  END;
+END $$;
+
+DO $$
+BEGIN
+  BEGIN
+    INSERT INTO aop.reviews (
+      id, organization_id, subject_type, subject_id, reviewer_type, reviewer_id,
+      criteria, evidence, result, findings, created_at, completed_at, revision
+    ) VALUES (
+      'rev_00000000000000000000000001',
+      'org_00000000000000000000000001',
+      'task',
+      'tsk_00000000000000000000000001',
+      'human',
+      'usr_00000000000000000000000001',
+      '[{"key":"tests.pass","description":"Tests pass","required":true}]'::jsonb,
+      '[]'::jsonb,
+      'pass',
+      '[]'::jsonb,
+      now(),
+      now(),
+      1
+    );
+    RAISE EXCEPTION 'passing review without evidence was incorrectly accepted';
+  EXCEPTION
+    WHEN check_violation THEN NULL;
   END;
 END $$;
 
