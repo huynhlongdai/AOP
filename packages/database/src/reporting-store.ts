@@ -34,109 +34,95 @@ async function buildReport(
   const exists = await client.query("SELECT 1 FROM aop.organizations WHERE id = $1", [organizationId]);
   if (exists.rowCount === 0) return undefined;
 
-  const [
-    taskRows,
-    runRows,
-    leaseRows,
-    decisionRows,
-    reviewRows,
-    artifactRows,
-    staleLinkRows,
-    staleCompletedRows,
-    blockedTaskRows,
-    staleTaskRows,
-    blockingDecisionRows,
-    pendingDecisionRows,
-    reworkReviewRows,
-    eventRows,
-  ] = await Promise.all([
-    client.query<CountRow>(
-      "SELECT state AS key, count(*) AS count FROM aop.tasks WHERE organization_id = $1 GROUP BY state",
-      [organizationId],
-    ),
-    client.query<CountRow>(
-      "SELECT status AS key, count(*) AS count FROM aop.task_runs WHERE organization_id = $1 GROUP BY status",
-      [organizationId],
-    ),
-    client.query<CountRow>(
-      "SELECT status AS key, count(*) AS count FROM aop.leases WHERE organization_id = $1 GROUP BY status",
-      [organizationId],
-    ),
-    client.query<CountRow>(
-      "SELECT status AS key, count(*) AS count FROM aop.decisions WHERE organization_id = $1 GROUP BY status",
-      [organizationId],
-    ),
-    client.query<CountRow>(
-      "SELECT result AS key, count(*) AS count FROM aop.reviews WHERE organization_id = $1 GROUP BY result",
-      [organizationId],
-    ),
-    client.query<{ total: string | number; approved: string | number }>(
-      `SELECT count(*) AS total,
-              count(*) FILTER (WHERE current_approved_version_id IS NOT NULL) AS approved
-         FROM aop.artifacts
-        WHERE organization_id = $1`,
-      [organizationId],
-    ),
-    client.query<{ count: string | number }>(
-      `SELECT count(*) AS count
-         FROM aop.task_artifact_input_status
-        WHERE organization_id = $1 AND required = true AND stale = true`,
-      [organizationId],
-    ),
-    client.query<{ count: string | number }>(
-      `SELECT count(*) AS count
-         FROM aop.tasks task
-        WHERE task.organization_id = $1
-          AND task.state = 'completed'
-          AND EXISTS (
-            SELECT 1
-              FROM aop.task_artifact_input_status input_status
-             WHERE input_status.organization_id = task.organization_id
-               AND input_status.task_id = task.id
-               AND input_status.required = true
-               AND input_status.stale = true
-          )`,
-      [organizationId],
-    ),
-    client.query<IdRow>(
-      "SELECT id FROM aop.tasks WHERE organization_id = $1 AND state = 'blocked' ORDER BY id",
-      [organizationId],
-    ),
-    client.query<IdRow>(
-      `SELECT DISTINCT task_id AS id
-         FROM aop.task_artifact_input_status
-        WHERE organization_id = $1 AND required = true AND stale = true
-        ORDER BY task_id`,
-      [organizationId],
-    ),
-    client.query<IdRow>(
-      `SELECT DISTINCT impact.decision_id AS id
-         FROM aop.decision_impacts impact
-         JOIN aop.decisions decision
-           ON decision.organization_id = impact.organization_id
-          AND decision.id = impact.decision_id
-        WHERE impact.organization_id = $1
-          AND impact.impact_type = 'blocks'
-          AND decision.status NOT IN ('rejected','superseded')
-        ORDER BY impact.decision_id`,
-      [organizationId],
-    ),
-    client.query<IdRow>(
-      `SELECT id
-         FROM aop.decisions
-        WHERE organization_id = $1 AND status IN ('proposed','discussion','approval_pending')
-        ORDER BY id`,
-      [organizationId],
-    ),
-    client.query<IdRow>(
-      "SELECT id FROM aop.reviews WHERE organization_id = $1 AND result = 'rework' ORDER BY id",
-      [organizationId],
-    ),
-    client.query<{ latest: string | number }>(
-      "SELECT COALESCE(MAX(organization_sequence), 0) AS latest FROM aop.events WHERE organization_id = $1",
-      [organizationId],
-    ),
-  ]);
+  // A single pg client cannot safely execute concurrent queries. Keep these
+  // reads sequential so the whole report remains inside one repeatable-read
+  // snapshot and remains compatible with pg@9.
+  const taskRows = await client.query<CountRow>(
+    "SELECT state AS key, count(*) AS count FROM aop.tasks WHERE organization_id = $1 GROUP BY state",
+    [organizationId],
+  );
+  const runRows = await client.query<CountRow>(
+    "SELECT status AS key, count(*) AS count FROM aop.task_runs WHERE organization_id = $1 GROUP BY status",
+    [organizationId],
+  );
+  const leaseRows = await client.query<CountRow>(
+    "SELECT status AS key, count(*) AS count FROM aop.leases WHERE organization_id = $1 GROUP BY status",
+    [organizationId],
+  );
+  const decisionRows = await client.query<CountRow>(
+    "SELECT status AS key, count(*) AS count FROM aop.decisions WHERE organization_id = $1 GROUP BY status",
+    [organizationId],
+  );
+  const reviewRows = await client.query<CountRow>(
+    "SELECT result AS key, count(*) AS count FROM aop.reviews WHERE organization_id = $1 GROUP BY result",
+    [organizationId],
+  );
+  const artifactRows = await client.query<{ total: string | number; approved: string | number }>(
+    `SELECT count(*) AS total,
+            count(*) FILTER (WHERE current_approved_version_id IS NOT NULL) AS approved
+       FROM aop.artifacts
+      WHERE organization_id = $1`,
+    [organizationId],
+  );
+  const staleLinkRows = await client.query<{ count: string | number }>(
+    `SELECT count(*) AS count
+       FROM aop.task_artifact_input_status
+      WHERE organization_id = $1 AND required = true AND stale = true`,
+    [organizationId],
+  );
+  const staleCompletedRows = await client.query<{ count: string | number }>(
+    `SELECT count(*) AS count
+       FROM aop.tasks task
+      WHERE task.organization_id = $1
+        AND task.state = 'completed'
+        AND EXISTS (
+          SELECT 1
+            FROM aop.task_artifact_input_status input_status
+           WHERE input_status.organization_id = task.organization_id
+             AND input_status.task_id = task.id
+             AND input_status.required = true
+             AND input_status.stale = true
+        )`,
+    [organizationId],
+  );
+  const blockedTaskRows = await client.query<IdRow>(
+    "SELECT id FROM aop.tasks WHERE organization_id = $1 AND state = 'blocked' ORDER BY id",
+    [organizationId],
+  );
+  const staleTaskRows = await client.query<IdRow>(
+    `SELECT DISTINCT task_id AS id
+       FROM aop.task_artifact_input_status
+      WHERE organization_id = $1 AND required = true AND stale = true
+      ORDER BY task_id`,
+    [organizationId],
+  );
+  const blockingDecisionRows = await client.query<IdRow>(
+    `SELECT DISTINCT impact.decision_id AS id
+       FROM aop.decision_impacts impact
+       JOIN aop.decisions decision
+         ON decision.organization_id = impact.organization_id
+        AND decision.id = impact.decision_id
+      WHERE impact.organization_id = $1
+        AND impact.impact_type = 'blocks'
+        AND decision.status NOT IN ('rejected','superseded')
+      ORDER BY impact.decision_id`,
+    [organizationId],
+  );
+  const pendingDecisionRows = await client.query<IdRow>(
+    `SELECT id
+       FROM aop.decisions
+      WHERE organization_id = $1 AND status IN ('proposed','discussion','approval_pending')
+      ORDER BY id`,
+    [organizationId],
+  );
+  const reworkReviewRows = await client.query<IdRow>(
+    "SELECT id FROM aop.reviews WHERE organization_id = $1 AND result = 'rework' ORDER BY id",
+    [organizationId],
+  );
+  const eventRows = await client.query<{ latest: string | number }>(
+    "SELECT COALESCE(MAX(organization_sequence), 0) AS latest FROM aop.events WHERE organization_id = $1",
+    [organizationId],
+  );
 
   const tasks = countMap(taskRows.rows);
   const runs = countMap(runRows.rows);
