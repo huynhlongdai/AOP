@@ -1,6 +1,6 @@
 # AOP — Agent Organization Protocol
 
-**Status: Planning complete — Ready for Slice 0 implementation**
+**Status: Gate B passed — Slice 1 Coordination Engine complete; entering Slice 2 Organizational Truth**
 
 **UX/UI status: v0.1 FROZEN for PoC implementation — React transfer plan approved**
 
@@ -34,10 +34,13 @@ AOP treats an AI organization as a distributed system.
 2. `docs/protocol/AOP-v0.1.md`
 3. `docs/architecture/system-architecture-v0.1.md`
 4. `docs/implementation/MASTER_IMPLEMENTATION_PLAN.md`
-5. `docs/design/UX_UI_SYSTEM_v0.1.md`
-6. `docs/implementation/UI_IMPLEMENTATION_PLAN.md`
-7. `docs/implementation/REACT_TRANSFER_PLAN.md`
-8. `prototype/README.md`
+5. `docs/implementation/SLICE0_GATE_A_CHECKPOINT.md`
+6. `docs/implementation/SLICE1_GATE_B_CHECKPOINT.md`
+7. `docs/implementation/T0020_SCHEDULER_READINESS_LEASE.md`
+8. `docs/design/UX_UI_SYSTEM_v0.1.md`
+9. `docs/implementation/UI_IMPLEMENTATION_PLAN.md`
+10. `docs/implementation/REACT_TRANSFER_PLAN.md`
+11. `prototype/README.md`
 
 ## Meeting record
 
@@ -132,21 +135,47 @@ See `docs/implementation/REACT_TRANSFER_PLAN.md`.
 
 ## Execution slices
 
-- Slice 0 — Deterministic Kernel
-- Slice 1 — Coordination Engine
-- Slice 2 — Organizational Truth
+- Slice 0 — Deterministic Kernel — **Gate A passed**
+- Slice 1 — Coordination Engine — **Gate B passed**
+- Slice 2 — Organizational Truth — **NEXT**
 - Slice 3 — Intelligence Boundary
 - Slice 4 — Real Work Environment
 - Slice 5 — Product PoC
 - Slice 6 — Comparative Validation
 
-## Immediate next ticket
+## Current implementation checkpoint
 
-`T0001 — Initialize monorepo`
+Completed through `T0020 — Scheduler / Readiness / Lease Coordination`.
 
-See `docs/implementation/MASTER_IMPLEMENTATION_PLAN.md` for the complete dependency graph, epics, tickets, acceptance criteria, security requirements, chaos tests, and go/no-go gates.
+The deterministic substrate now includes:
 
-The next project phase is engineering execution, not further speculative UX expansion.
+- authoritative PostgreSQL state
+- Command -> Policy -> Domain -> Transaction -> Event/Outbox mutation path
+- optimistic revision and idempotency fencing
+- authoritative Query API + resumable ordered SSE
+- durable Outbox delivery and stale-worker recovery
+- deterministic Task readiness and Scheduler claims
+- TaskRun / Lease execution ownership
+- heartbeat revision fencing
+- expired-Lease recovery to lost Run + READY Task
+- next-attempt failover without manual database repair
+
+See `docs/implementation/SLICE1_GATE_B_CHECKPOINT.md` for evidence.
+
+## Immediate next engineering focus
+
+**Slice 2 — Organizational Truth (E07–E08)**
+
+Implement production vertical slices for:
+
+1. Artifact publish/version semantics
+2. Artifact lineage and consumers
+3. breaking-version impact analysis and stale-work detection
+4. Decision authority, activation and supersession
+5. Review/rejection/rework control of Task completion
+6. verified Reporting Engine
+
+The next project phase remains engineering execution, not speculative UX expansion or Marketplace work.
 
 ## PoC non-goals
 
