@@ -8,8 +8,8 @@ import {
 
 import { invariant } from "./errors.js";
 
-function edgeKey(edge: TaskDependency): string {
-  return `${edge.organizationId}:${edge.taskId}:${edge.dependsOnTaskId}:${edge.type}`;
+function edgeKey(edge: Pick<TaskDependency, "organizationId" | "taskId" | "dependsOnTaskId">): string {
+  return `${edge.organizationId}:${edge.taskId}:${edge.dependsOnTaskId}`;
 }
 
 function hasPath(
@@ -50,7 +50,7 @@ export function addTaskDependency(
 
   invariant(
     !existing.some((edge) => edgeKey(edge) === edgeKey(candidate)),
-    "Duplicate task dependency",
+    "Task dependency already exists between these tasks",
     { edge: candidate },
   );
 
