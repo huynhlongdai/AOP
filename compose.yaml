@@ -1,0 +1,49 @@
+name: aop-local
+
+services:
+  postgres:
+    image: postgres:18.6-alpine
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-aop}
+      POSTGRES_USER: ${POSTGRES_USER:-aop}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-aop-local-password}
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 5s
+
+  object-store:
+    image: versity/versitygw:v1.6.0
+    environment:
+      ROOT_ACCESS_KEY: ${S3_ACCESS_KEY:-aop-local}
+      ROOT_SECRET_KEY: ${S3_SECRET_KEY:-aop-local-secret-change-me}
+    command:
+      - --iam-dir
+      - /data/iam
+      - --webui
+      - :8080
+      - posix
+      - --versioning-dir
+      - /data/versioning
+      - /data/objects
+    ports:
+      - "${S3_PORT:-7070}:7070"
+      - "${S3_WEB_PORT:-8080}:8080"
+    volumes:
+      - object-store-data:/data
+    healthcheck:
+      test: ["CMD", "versitygw", "--version"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 5s
+
+volumes:
+  postgres-data:
+  object-store-data:
