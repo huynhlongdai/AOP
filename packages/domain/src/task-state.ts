@@ -65,15 +65,23 @@ export function startTask(current: Task, expectedRevision: number, updatedAt: st
   return TaskSchema.parse(transitionBase(current, "running", expectedRevision, updatedAt));
 }
 
+export function returnTaskToReadyAfterRunTermination(
+  current: Task,
+  expectedRevision: number,
+  updatedAt: string,
+): Task {
+  assertCurrentState(current, ["leased", "running"], "return to ready after run termination");
+  const candidate = transitionBase(current, "ready", expectedRevision, updatedAt);
+  delete candidate.ownerAgentId;
+  return TaskSchema.parse(candidate);
+}
+
 export function returnTaskToReadyAfterRunLoss(
   current: Task,
   expectedRevision: number,
   updatedAt: string,
 ): Task {
-  assertCurrentState(current, ["leased", "running"], "return to ready after run loss");
-  const candidate = transitionBase(current, "ready", expectedRevision, updatedAt);
-  delete candidate.ownerAgentId;
-  return TaskSchema.parse(candidate);
+  return returnTaskToReadyAfterRunTermination(current, expectedRevision, updatedAt);
 }
 
 export function blockTask(
