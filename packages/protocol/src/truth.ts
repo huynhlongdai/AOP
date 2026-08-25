@@ -119,15 +119,28 @@ export const DecisionSchema = z
       ctx.addIssue({ code: "custom", path: ["selectedOptionId"], message: "selectedOptionId must reference one of the decision options" });
     }
 
-    if (decision.status === "active") {
+    const preservesApprovalHistory = decision.status === "active" || decision.status === "superseded";
+    if (preservesApprovalHistory) {
       if (decision.selectedOptionId === undefined) {
-        ctx.addIssue({ code: "custom", path: ["selectedOptionId"], message: "active decisions require a selected option" });
+        ctx.addIssue({
+          code: "custom",
+          path: ["selectedOptionId"],
+          message: "active and superseded decisions require the selected historical option",
+        });
       }
       if (decision.rationale === undefined) {
-        ctx.addIssue({ code: "custom", path: ["rationale"], message: "active decisions require rationale" });
+        ctx.addIssue({
+          code: "custom",
+          path: ["rationale"],
+          message: "active and superseded decisions require historical rationale",
+        });
       }
       if (decision.approvedBy === undefined || decision.effectiveAt === undefined) {
-        ctx.addIssue({ code: "custom", path: ["approvedBy"], message: "active decisions require approval metadata" });
+        ctx.addIssue({
+          code: "custom",
+          path: ["approvedBy"],
+          message: "active and superseded decisions require approval metadata",
+        });
       }
     }
   });
@@ -161,11 +174,21 @@ export const ReviewSchema = z
   })
   .strict()
   .superRefine((review, ctx) => {
-    if (review.result === "pending" && review.completedAt !== undefined) {
-      ctx.addIssue({ code: "custom", path: ["completedAt"], message: "pending reviews cannot be completed" });
+    if (review.result === "pending") {
+      if (review.completedAt !== undefined) {
+        ctx.addIssue({ code: "custom", path: ["completedAt"], message: "pending reviews cannot be completed" });
+      }
+      return;
     }
-    if (review.result !== "pending" && review.completedAt === undefined) {
+
+    if (review.completedAt === undefined) {
       ctx.addIssue({ code: "custom", path: ["completedAt"], message: "completed reviews require completedAt" });
+    }
+    if (review.result === "pass" && review.evidence.length === 0) {
+      ctx.addIssue({ code: "custom", path: ["evidence"], message: "passing reviews require evidence" });
+    }
+    if ((review.result === "rework" || review.result === "fail") && review.findings.length === 0) {
+      ctx.addIssue({ code: "custom", path: ["findings"], message: `${review.result} reviews require findings` });
     }
   });
 
@@ -226,8 +249,12 @@ export const ApprovalRequestSchema = z
     if (decided && (approval.decidedBy === undefined || approval.decidedAt === undefined)) {
       ctx.addIssue({ code: "custom", path: ["decidedBy"], message: "decided approvals require decidedBy and decidedAt" });
     }
-    if (approval.status === "pending" && (approval.decidedBy !== undefined || approval.decidedAt !== undefined)) {
-      ctx.addIssue({ code: "custom", path: ["decidedBy"], message: "pending approvals cannot contain decision metadata" });
+    if (!decided && (approval.decidedBy !== undefined || approval.decidedAt !== undefined)) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["decidedBy"],
+        message: "pending, expired, and cancelled approvals cannot contain decision metadata",
+      });
     }
     if (approval.requiredAuthority === "human" && approval.decidedBy !== undefined && !HumanPrincipalSchema.safeParse(approval.decidedBy).success) {
       ctx.addIssue({ code: "custom", path: ["decidedBy"], message: "human-required approvals must be decided by a human principal" });
