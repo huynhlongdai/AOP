@@ -2,7 +2,7 @@
 
 **Status: Planning complete — Ready for Slice 0 implementation**
 
-**UX/UI status: v0.1 approved for PoC implementation**
+**UX/UI status: v0.1 FROZEN for PoC implementation — React transfer plan approved**
 
 AOP is an experimental protocol and runtime architecture for organizing autonomous AI workers into persistent teams, companies, and organizations.
 
@@ -36,6 +36,8 @@ AOP treats an AI organization as a distributed system.
 4. `docs/implementation/MASTER_IMPLEMENTATION_PLAN.md`
 5. `docs/design/UX_UI_SYSTEM_v0.1.md`
 6. `docs/implementation/UI_IMPLEMENTATION_PLAN.md`
+7. `docs/implementation/REACT_TRANSFER_PLAN.md`
+8. `prototype/README.md`
 
 ## Meeting record
 
@@ -47,10 +49,14 @@ AOP treats an AI organization as a distributed system.
 6. `docs/meetings/006-poc-product-deployment-evaluation.md`
 7. `docs/meetings/007-execution-readiness-review.md`
 8. `docs/meetings/008-ux-ui-alignment.md`
+9. `docs/meetings/009-frontend-prototype-kickoff.md`
+10. `docs/meetings/010-truth-automation-attention-ux.md`
+11. `docs/meetings/011-ux-stress-scale-navigation.md`
+12. `docs/meetings/012-ux-freeze-react-transfer.md`
 
-Meeting #007 formally closed speculative architecture planning. Future architecture meetings should be triggered by implementation evidence, failed gates, or ADR-worthy cross-cutting decisions.
+Meeting #007 formally closed speculative architecture planning. Later meetings refine product/UX or respond to implementation evidence rather than reopening the Kernel without evidence.
 
-Meeting #008 approved the UX/UI information architecture and interaction system for the PoC. The visual mockups are exploration references; `docs/design/UX_UI_SYSTEM_v0.1.md` is the frontend UX source of truth.
+Meetings #008–#012 established, prototyped, stress-tested and finally froze the UX/UI contract for the PoC. The zero-build prototype remains a reference artifact; production transfer is governed by `docs/implementation/REACT_TRANSFER_PLAN.md`.
 
 ## Current PoC target
 
@@ -79,6 +85,51 @@ The UI is organized around four layers:
 
 > **State over conversation. Evidence over self-report. Exceptions over noise.**
 
+At organizational scale, the UX adds:
+
+- hierarchical context narrowing instead of menu explosion
+- deterministic/ranked Human Attention
+- Search + Command Palette for cross-object navigation
+- saved views / aggregation / density controls for high-volume lists
+- progressive disclosure from executive summary -> operational evidence -> diagnostic detail
+- explicit drill-up paths from deep detail pages
+
+## Prototype status
+
+The `prototype/` directory contains a zero-build clickable prototype covering:
+
+- Executive Dashboard
+- Project Workspace
+- Task Board + Task Detail
+- Agent Directory + Agent Detail
+- Artifact Registry + Artifact Detail
+- Decision Registry + Decision Detail
+- Human Approval Center + Approval Detail
+- Schedule/Cron + Schedule Detail
+- Event Explorer + Event Detail
+- Knowledge/Memory boundary overview
+- Command Palette
+- ranked Human Attention drawer
+- hierarchical context switcher
+- 12 / 120 / 1,200-agent scale fixtures
+
+The prototype intentionally uses mock domain data while preserving legitimate AOP semantics. It is an interaction validation layer, not a second source of truth. Feature expansion is frozen after Meeting #012 unless implementation/usability evidence requires a focused experiment.
+
+## UX implementation contract
+
+The production React client must preserve:
+
+- organization-scoped canonical routes
+- shared DetailShell / ContextRail grammar
+- Snapshot + ordered SSE + reconciliation realtime behavior
+- explicit stale/reconnecting states
+- no optimistic authoritative lifecycle mutations
+- command result / event reconciliation for protected actions
+- accessibility baseline
+- scale-aware pagination/virtualization/aggregation
+
+See `docs/implementation/REACT_TRANSFER_PLAN.md`.
+
 ## Execution slices
 
 - Slice 0 — Deterministic Kernel
@@ -95,7 +146,7 @@ The UI is organized around four layers:
 
 See `docs/implementation/MASTER_IMPLEMENTATION_PLAN.md` for the complete dependency graph, epics, tickets, acceptance criteria, security requirements, chaos tests, and go/no-go gates.
 
-See `docs/implementation/UI_IMPLEMENTATION_PLAN.md` for the approved frontend route model, screen backlog, implementation order, P0 gate, and UX engineering constraints.
+The next project phase is engineering execution, not further speculative UX expansion.
 
 ## PoC non-goals
 
@@ -103,6 +154,6 @@ See `docs/implementation/UI_IMPLEMENTATION_PLAN.md` for the approved frontend ro
 - token economy
 - reputation economy
 - large-scale microservices
-- hundreds of agents
+- hundreds of agents in the first functional PoC
 
 The first objective is to prove that the Organization Kernel improves verified autonomous work compared with a single-agent baseline and a simple supervisor multi-agent baseline.
