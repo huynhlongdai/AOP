@@ -2,6 +2,8 @@
 
 **Status: Planning complete — Ready for Slice 0 implementation**
 
+**UX/UI status: v0.1 approved for PoC implementation**
+
 AOP is an experimental protocol and runtime architecture for organizing autonomous AI workers into persistent teams, companies, and organizations.
 
 The project started from a broader Agent Marketplace vision: agents should not be isolated chatbots or prompt packages. An agent should have identity, role, capabilities, skills, tools, memory, permissions, work history, and measurable performance. Agents should be able to operate independently or be hired into teams and companies under AI or human management.
@@ -32,6 +34,8 @@ AOP treats an AI organization as a distributed system.
 2. `docs/protocol/AOP-v0.1.md`
 3. `docs/architecture/system-architecture-v0.1.md`
 4. `docs/implementation/MASTER_IMPLEMENTATION_PLAN.md`
+5. `docs/design/UX_UI_SYSTEM_v0.1.md`
+6. `docs/implementation/UI_IMPLEMENTATION_PLAN.md`
 
 ## Meeting record
 
@@ -42,8 +46,11 @@ AOP treats an AI organization as a distributed system.
 5. `docs/meetings/005-runtime-context-memory-recovery.md`
 6. `docs/meetings/006-poc-product-deployment-evaluation.md`
 7. `docs/meetings/007-execution-readiness-review.md`
+8. `docs/meetings/008-ux-ui-alignment.md`
 
-Meeting #007 formally closed speculative planning. Future architecture meetings should be triggered by implementation evidence, failed gates, or ADR-worthy cross-cutting decisions.
+Meeting #007 formally closed speculative architecture planning. Future architecture meetings should be triggered by implementation evidence, failed gates, or ADR-worthy cross-cutting decisions.
+
+Meeting #008 approved the UX/UI information architecture and interaction system for the PoC. The visual mockups are exploration references; `docs/design/UX_UI_SYSTEM_v0.1.md` is the frontend UX source of truth.
 
 ## Current PoC target
 
@@ -58,6 +65,19 @@ BE FE QA
 ```
 
 The PoC must autonomously plan, decompose, assign, execute, produce artifacts, review, rework, integrate, test, report verified state, and recover from injected failures.
+
+## Product UX thesis
+
+AOP is designed as an **AI Organization Operating System**, not primarily as a chatbot, kanban application, or workflow builder.
+
+The UI is organized around four layers:
+
+- Executive — health, goals, approvals, risks, verified progress
+- Work — projects, tasks, runs, reviews, blockers
+- Workforce — agents, teams, roles, capabilities, permissions
+- Truth/Automation/Audit — artifacts, decisions, schedules, events, memory
+
+> **State over conversation. Evidence over self-report. Exceptions over noise.**
 
 ## Execution slices
 
@@ -74,6 +94,8 @@ The PoC must autonomously plan, decompose, assign, execute, produce artifacts, r
 `T0001 — Initialize monorepo`
 
 See `docs/implementation/MASTER_IMPLEMENTATION_PLAN.md` for the complete dependency graph, epics, tickets, acceptance criteria, security requirements, chaos tests, and go/no-go gates.
+
+See `docs/implementation/UI_IMPLEMENTATION_PLAN.md` for the approved frontend route model, screen backlog, implementation order, P0 gate, and UX engineering constraints.
 
 ## PoC non-goals
 
