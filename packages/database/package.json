@@ -14,6 +14,7 @@
   "files": ["dist"],
   "dependencies": {
     "@aop/command-bus": "workspace:*",
+    "@aop/context-engine": "workspace:*",
     "@aop/domain": "workspace:*",
     "@aop/protocol": "workspace:*",
     "pg": "^8.23.0"
