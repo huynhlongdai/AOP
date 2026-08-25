@@ -152,6 +152,36 @@ export class CommandGateway {
     return this.#executeParsed(parsed.data);
   }
 
+  async #recordDomainRejection(
+    command: CommandEnvelope,
+    requestDigest: string,
+    result: CommandResult,
+  ): Promise<CommandResult> {
+    return this.#deps.store.transaction(async (transaction) => {
+      const existing = await transaction.findDedup(command.organizationId, command.idempotencyKey);
+      if (existing !== undefined) {
+        if (existing.requestDigest !== requestDigest) {
+          return rejected(command, "idempotency_conflict", "Idempotency key was reused with a different request", false, {
+            originalCommandId: existing.commandId,
+            originalCommandType: existing.commandType,
+          });
+        }
+        if (existing.result !== undefined) return existing.result;
+      } else {
+        await transaction.beginDedup({
+          organizationId: command.organizationId,
+          idempotencyKey: command.idempotencyKey,
+          commandId: command.commandId,
+          commandType: command.type,
+          actor: command.actor,
+          requestDigest,
+        });
+      }
+      await transaction.finishDedup(command.organizationId, command.idempotencyKey, "rejected", result);
+      return result;
+    });
+  }
+
   async #executeParsed(command: CommandEnvelope): Promise<CommandResult> {
     const handler = findHandler(this.#deps.handlers, command.type);
     if (handler === undefined) {
@@ -166,9 +196,10 @@ export class CommandGateway {
       });
     }
 
+    const requestDigest = this.#deps.digest(command);
+
     try {
       return await this.#deps.store.transaction(async (transaction) => {
-        const requestDigest = this.#deps.digest(command);
         const existing = await transaction.findDedup(command.organizationId, command.idempotencyKey);
         if (existing !== undefined) {
           if (existing.requestDigest !== requestDigest) {
@@ -201,18 +232,7 @@ export class CommandGateway {
           requestDigest,
         });
 
-        let resolution: Awaited<ReturnType<CommandGatewayDependencies["authorization"]["resolve"]>>;
-        try {
-          resolution = await this.#deps.authorization.resolve(command, handler.capability, transaction);
-        } catch (error) {
-          if (error instanceof DomainError) {
-            const result = domainRejected(command, error);
-            await transaction.finishDedup(command.organizationId, command.idempotencyKey, "rejected", result);
-            return result;
-          }
-          throw error;
-        }
-
+        const resolution = await this.#deps.authorization.resolve(command, handler.capability, transaction);
         if (!policyResolutionIsBoundToCommand(command, handler.capability, resolution)) {
           const result = rejected(command, "internal_error", "Authorization resolver returned mismatched context", false);
           await transaction.finishDedup(command.organizationId, command.idempotencyKey, "rejected", result);
@@ -259,22 +279,9 @@ export class CommandGateway {
           return result;
         }
 
-        let mutation;
-        try {
-          mutation = await handler.execute(command, transaction);
-        } catch (error) {
-          if (error instanceof DomainError) {
-            const result = domainRejected(command, error);
-            await transaction.finishDedup(command.organizationId, command.idempotencyKey, "rejected", result);
-            return result;
-          }
-          throw error;
-        }
-
+        const mutation = await handler.execute(command, transaction);
         if (mutation.events.length === 0) {
-          const result = rejected(command, "invariant_violation", "Accepted mutation must emit at least one event", false);
-          await transaction.finishDedup(command.organizationId, command.idempotencyKey, "rejected", result);
-          return result;
+          throw new DomainError("invariant_violation", "Accepted mutation must emit at least one event");
         }
 
         const emittedEventIds = [];
@@ -292,7 +299,16 @@ export class CommandGateway {
         return result;
       });
     } catch (error) {
-      if (error instanceof DomainError) return domainRejected(command, error);
+      if (error instanceof DomainError) {
+        const result = domainRejected(command, error);
+        try {
+          return await this.#recordDomainRejection(command, requestDigest, result);
+        } catch (recordError) {
+          return rejected(command, "internal_error", "Command failed and rejection could not be recorded", true, {
+            errorName: recordError instanceof Error ? recordError.name : "UnknownError",
+          });
+        }
+      }
       return rejected(command, "internal_error", "Command execution failed", true, {
         errorName: error instanceof Error ? error.name : "UnknownError",
       });
