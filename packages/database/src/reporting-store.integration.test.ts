@@ -128,16 +128,13 @@ async function seed(): Promise<void> {
        id, organization_id, task_id, run_id, agent_id, status, attempt,
        acquired_at, expires_at, heartbeat_interval_seconds, revision
      ) VALUES
-       ($1,$7,$8,$9,$10,'released',1,$11,$12,30,1),
-       ($2,$7,$13,$14,$10,'active',1,$11,$12,30,1),
-       ($3,$7,$15,$16,$10,'expired',1,$11,$12,30,1)`,
+       ($1,$4,$5,$6,$7,'released',1,$8,$9,30,1),
+       ($2,$4,$10,$11,$7,'active',1,$8,$9,30,1),
+       ($3,$4,$12,$13,$7,'expired',1,$8,$9,30,1)`,
     [
       completedLeaseId,
       runningLeaseId,
       expiredLeaseId,
-      null,
-      null,
-      null,
       orgId,
       completedTaskId,
       completedRunId,
@@ -156,19 +153,13 @@ async function seed(): Promise<void> {
        id, organization_id, subject_type, subject_id, reviewer_type, reviewer_id,
        criteria, evidence, result, findings, created_at, completed_at, revision
      ) VALUES
-       ($1,$10,'task',$11,'agent',$12,'[{"key":"qa.pass","description":"QA pass","required":true}]',$13::jsonb,'pass','[]',$14,$14,1),
-       ($2,$10,'task',$15,'agent',$12,'[{"key":"qa.pass","description":"QA pass","required":true}]','[]','pending','[]',$14,NULL,0),
-       ($3,$10,'task',$16,'agent',$12,'[{"key":"qa.pass","description":"QA pass","required":true}]','[]','rework','["fix contract"]',$14,$14,1)`,
+       ($1,$4,'task',$5,'agent',$6,'[{"key":"qa.pass","description":"QA pass","required":true}]',$7::jsonb,'pass','[]',$8,$8,1),
+       ($2,$4,'task',$9,'agent',$6,'[{"key":"qa.pass","description":"QA pass","required":true}]','[]','pending','[]',$8,NULL,0),
+       ($3,$4,'task',$10,'agent',$6,'[{"key":"qa.pass","description":"QA pass","required":true}]','[]','rework','["fix contract"]',$8,$8,1)`,
     [
       passReviewId,
       pendingReviewId,
       reworkReviewId,
-      null,
-      null,
-      null,
-      null,
-      null,
-      null,
       orgId,
       completedTaskId,
       reviewerId,
@@ -200,8 +191,8 @@ async function seed(): Promise<void> {
   await pool.query(
     `INSERT INTO aop.artifacts (
        id, organization_id, type, title, current_approved_version_id, revision, created_at, updated_at
-     ) VALUES ($1,$2,'api.spec','Auth contract',$3,1,$4,$4)`,
-    [artifactId, orgId, currentVersionId, now],
+     ) VALUES ($1,$2,'api.spec','Auth contract',NULL,0,$3,$3)`,
+    [artifactId, orgId, now],
   );
   await pool.query(
     `INSERT INTO aop.artifact_versions (
@@ -225,6 +216,12 @@ async function seed(): Promise<void> {
     ],
   );
   await pool.query(
+    `UPDATE aop.artifacts
+        SET current_approved_version_id = $3, revision = 1, updated_at = $4
+      WHERE organization_id = $1 AND id = $2`,
+    [orgId, artifactId, currentVersionId, now],
+  );
+  await pool.query(
     `INSERT INTO aop.task_artifact_inputs (organization_id, task_id, artifact_version_id, required, created_at)
      VALUES ($1,$2,$3,true,$4)`,
     [orgId, runningTaskId, staleVersionId, now],
@@ -236,10 +233,20 @@ async function seed(): Promise<void> {
        type, aggregate_type, aggregate_id, aggregate_revision, actor_type, actor_id,
        correlation_id, payload, occurred_at
      ) VALUES
-       ($1,$7,1,1,'0.1.0','task.updated','task',$8,1,'human',$9,'report-fixture','{}',$10),
-       ($2,$7,2,1,'0.1.0','decision.activated','decision',$11,2,'human',$9,'report-fixture','{}',$10),
-       ($3,$7,3,1,'0.1.0','review.resolved','review',$12,1,'human',$9,'report-fixture','{}',$10)`,
-    [`evt_${ulid(81)}`, `evt_${ulid(82)}`, `evt_${ulid(83)}`, null, null, null, orgId, runningTaskId, ownerId, now, activeDecisionId, passReviewId],
+       ($1,$4,1,1,'0.1.0','task.updated','task',$5,1,'human',$6,'report-fixture','{}',$7),
+       ($2,$4,2,1,'0.1.0','decision.activated','decision',$8,2,'human',$6,'report-fixture','{}',$7),
+       ($3,$4,3,1,'0.1.0','review.resolved','review',$9,1,'human',$6,'report-fixture','{}',$7)`,
+    [
+      `evt_${ulid(81)}`,
+      `evt_${ulid(82)}`,
+      `evt_${ulid(83)}`,
+      orgId,
+      runningTaskId,
+      ownerId,
+      now,
+      activeDecisionId,
+      passReviewId,
+    ],
   );
 }
 
