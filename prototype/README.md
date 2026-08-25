@@ -1,6 +1,6 @@
-# AOP Clickable UI Prototype v0.1
+# AOP Clickable UI Prototype v0.2
 
-This is the zero-build UX validation prototype created after Founding Company Meeting #009.
+This is the zero-build UX validation prototype created across Founding Company Meetings #009 and #010.
 
 ## Run
 
@@ -10,24 +10,56 @@ No dependency install or build step is required.
 
 ## Implemented clickable views
 
+### Operate
+
 - `#dashboard` — Executive Dashboard
-- `#project` / `#projects` — Project Phoenix Workspace
-- `#task` / `#tasks` — Task PHX-1402 Detail
-- `#agent` / `#agents` — Backend Agent Detail
+- `#project` — Project Phoenix Workspace
+- `#tasks` — Task Board
+- `#task-detail` — PHX-1402 Task Detail
+- `#agents` — Agent Directory
+- `#agent-detail` — Backend Agent Detail
 
-The sidebar also exposes the approved global information architecture. Non-slice pages intentionally show placeholders rather than fake product behavior.
+### Truth & Control
 
-## Review flow
+- `#artifacts` — Artifact Registry
+- `#artifact-detail` — API Specification Detail
+- `#decisions` — Decision Registry
+- `#decision-detail` — DEC-114 Decision Detail
+- `#approvals` — Human Approval Center
+- `#approvals-detail` — Protected Deployment Approval Detail
+- `#schedule` — Schedule & Cron
+- `#schedule-detail` — API Sync v2 Schedule Detail
+- `#events` — Event Explorer
+- `#event-detail` — Decision Approved Event Detail
 
-Recommended walkthrough:
+### Knowledge
+
+- `#knowledge` — Knowledge & Memory boundary overview
+
+## Primary review flow
 
 ```text
 Dashboard
-  -> click Project Phoenix in Current Initiatives
-  -> inspect Work Coordination Board
-  -> click PHX-1402
-  -> inspect authoritative inputs, run/lease, blocker, review and events
-  -> click Backend Agent from sidebar or current assignment
+  -> Human Attention / Approvals
+  -> inspect protected deployment request
+  -> related Task PHX-1402
+  -> authoritative API Spec v4
+  -> related DEC-114
+  -> downstream impact
+  -> Event Explorer / correlation chain
+  -> Schedule / run history
+```
+
+A second useful flow is:
+
+```text
+Project Phoenix
+  -> Task PHX-1402
+  -> Backend Agent
+  -> permissions / memory / tools
+  -> Artifact v4
+  -> Decision
+  -> Event
 ```
 
 ## Design principles represented
@@ -35,17 +67,20 @@ Dashboard
 - AI Organization OS mental model
 - state over conversation
 - evidence over self-report
-- human attention over activity noise
-- verified progress
-- authoritative artifact/decision references
+- exceptions over noise
+- verified progress instead of agent self-report
+- artifacts are versioned authoritative outputs, not generic files
+- decisions are explicit authoritative objects, not conclusions buried in chat
+- approvals are durable human-control workflows
+- schedules show human-readable time rule + timezone + raw cron
+- activity, events, and traces are distinct observability levels
+- cross-linked authoritative objects; no dead-end detail pages
 - bounded agent permissions
-- task lifecycle separated from blocked condition
-- discussion attached to work rather than treated as truth
-- shared visual grammar for future entity detail pages
+- shared detail-shell visual grammar
 
 ## Why zero-build first?
 
-The repository has not started Slice 0 implementation yet. This prototype validates information architecture and interaction hierarchy independently from framework setup. Once approved, the component/route model should be transferred into the planned React + Vite `apps/web` implementation and backed by Query API + SSE.
+The repository has not started Slice 0 implementation yet. This prototype validates information architecture and interaction hierarchy independently from framework setup. Once approved, the component/route model should be transferred into the planned React + Vite `apps/web` implementation and backed by Query API + ordered SSE organization events.
 
 ## Source documents
 
@@ -53,3 +88,4 @@ The repository has not started Slice 0 implementation yet. This prototype valida
 - `docs/implementation/UI_IMPLEMENTATION_PLAN.md`
 - `docs/meetings/008-ux-ui-alignment.md`
 - `docs/meetings/009-frontend-prototype-kickoff.md`
+- `docs/meetings/010-truth-automation-attention-ux.md`
