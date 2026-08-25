@@ -120,3 +120,6 @@ jobs:
 
       - name: Validate Artifact review lifecycle against PostgreSQL
         run: pnpm exec vitest run packages/database/src/artifact-lifecycle.integration.test.ts
+
+      - name: Validate Artifact consumer invalidation against PostgreSQL
+        run: pnpm exec vitest run packages/database/src/artifact-consumer-invalidation.integration.test.ts
