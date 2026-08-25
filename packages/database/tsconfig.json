@@ -9,7 +9,8 @@
   "references": [
     { "path": "../protocol" },
     { "path": "../domain" },
-    { "path": "../command-bus" }
+    { "path": "../command-bus" },
+    { "path": "../context-engine" }
   ],
   "include": ["src/**/*.ts"],
   "exclude": ["src/**/*.test.ts"]
