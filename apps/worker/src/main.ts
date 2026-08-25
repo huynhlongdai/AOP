@@ -4,6 +4,8 @@ import { Pool } from "pg";
 
 import {
   CommandGateway,
+  LeaseExpireHandler,
+  LeaseHeartbeatHandler,
   TaskClaimHandler,
   semanticCommandDigest,
   type GatewayIds,
@@ -16,9 +18,12 @@ import {
   runOutboxLoop,
 } from "@aop/event-bus";
 import {
+  DeterministicLeaseReaper,
   DeterministicScheduler,
+  PostgresExpiredLeaseStore,
   PostgresSchedulerCandidateStore,
   deterministicPrefixedUlid,
+  runLeaseReaperLoop,
   runSchedulerLoop,
 } from "@aop/scheduler";
 
@@ -63,7 +68,7 @@ async function main(): Promise<void> {
   const commandGateway = new CommandGateway({
     store: new PostgresCommandStore(pool),
     authorization: new PostgresAuthorizationResolver(clock),
-    handlers: [new TaskClaimHandler(clock)],
+    handlers: [new TaskClaimHandler(clock), new LeaseHeartbeatHandler(clock), new LeaseExpireHandler(clock)],
     ids: gatewayIds(clock),
     digest: semanticCommandDigest,
     now: clock,
@@ -79,6 +84,12 @@ async function main(): Promise<void> {
       process.env.SCHEDULER_HEARTBEAT_INTERVAL_SECONDS,
       60,
     ),
+  });
+  const leaseReaper = new DeterministicLeaseReaper({
+    store: new PostgresExpiredLeaseStore(pool),
+    executor: commandGateway,
+    now: clock,
+    candidateLimit: positiveInteger("LEASE_REAPER_CANDIDATE_LIMIT", process.env.LEASE_REAPER_CANDIDATE_LIMIT, 64),
   });
 
   const controller = new AbortController();
@@ -114,6 +125,21 @@ async function main(): Promise<void> {
           }
         },
         onError: (error) => console.error("Scheduler reconciliation cycle failed", error),
+      }),
+      runLeaseReaperLoop({
+        reaper: leaseReaper,
+        signal: controller.signal,
+        idleIntervalMs: positiveInteger("LEASE_REAPER_INTERVAL_MS", process.env.LEASE_REAPER_INTERVAL_MS, 1_000),
+        onResult: (result) => {
+          if (result.recovered !== undefined) {
+            console.warn("Recovered expired lease", {
+              organizationId: result.recovered.organizationId,
+              leaseId: result.recovered.leaseId,
+              leaseRevision: result.recovered.leaseRevision,
+            });
+          }
+        },
+        onError: (error) => console.error("Lease recovery cycle failed", error),
       }),
     ]);
   } finally {
