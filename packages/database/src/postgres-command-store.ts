@@ -8,6 +8,8 @@ import type {
   CommandTransaction,
   DedupRecord,
   DedupStatus,
+  LeaseExecutionBundle,
+  LeaseRecoveryTransaction,
   TaskClaimAgentProfile,
   TaskClaimTransaction,
 } from "@aop/command-bus";
@@ -24,6 +26,7 @@ import {
   type CommandResult,
   type EventEnvelope,
   type Lease,
+  type LeaseId,
   type OrganizationId,
   type Permission,
   type Principal,
@@ -34,7 +37,7 @@ import {
   type TaskRun,
 } from "@aop/protocol";
 
-import { mapRole, mapTask, type QueryRow } from "./query-mappers.js";
+import { mapLease, mapRole, mapTask, mapTaskRun, type QueryRow } from "./query-mappers.js";
 
 function timestamp(value: unknown): string {
   if (value instanceof Date) return value.toISOString();
@@ -113,7 +116,7 @@ const RESOURCE_TABLES: Readonly<Record<ResourceRef["type"], string | undefined>>
   context_manifest: "aop.context_manifests:id",
 };
 
-export class PostgresCommandTransaction implements TaskClaimTransaction {
+export class PostgresCommandTransaction implements TaskClaimTransaction, LeaseRecoveryTransaction {
   readonly #client: PoolClient;
 
   constructor(client: PoolClient) {
@@ -411,6 +414,111 @@ export class PostgresCommandTransaction implements TaskClaimTransaction {
     );
   }
 
+  async lockLeaseExecution(organizationId: OrganizationId, leaseId: LeaseId): Promise<LeaseExecutionBundle | undefined> {
+    const leaseRow = await one(
+      this.#client,
+      `SELECT * FROM aop.leases WHERE organization_id = $1 AND id = $2 FOR UPDATE`,
+      [organizationId, leaseId],
+    );
+    if (leaseRow === undefined) return undefined;
+
+    const runRow = await one(
+      this.#client,
+      `SELECT * FROM aop.task_runs WHERE organization_id = $1 AND id = $2 FOR UPDATE`,
+      [organizationId, leaseRow.run_id],
+    );
+    if (runRow === undefined) throw new Error("Lease references a missing task run");
+
+    const task = await this.lockTask(organizationId, String(leaseRow.task_id) as TaskId);
+    if (task === undefined) throw new Error("Lease references a missing task");
+
+    return {
+      lease: mapLease(leaseRow),
+      run: mapTaskRun(runRow),
+      task,
+    };
+  }
+
+  async persistLeaseHeartbeat(lease: Lease, run: TaskRun): Promise<void> {
+    const leaseRevision = lease.revision - 1;
+    const runRevision = run.revision - 1;
+
+    const leaseUpdate = await this.#client.query(
+      `UPDATE aop.leases
+          SET expires_at = $3, revision = $4
+        WHERE organization_id = $1 AND id = $2 AND revision = $5 AND status = 'active'`,
+      [lease.organizationId, lease.id, lease.expiresAt, lease.revision, leaseRevision],
+    );
+    if (leaseUpdate.rowCount !== 1) {
+      throw new DomainError("revision_conflict", "Lease changed before heartbeat persistence", {
+        leaseId: lease.id,
+        expectedRevision: leaseRevision,
+      });
+    }
+
+    const runUpdate = await this.#client.query(
+      `UPDATE aop.task_runs
+          SET heartbeat_at = $3, revision = $4
+        WHERE organization_id = $1 AND id = $2 AND revision = $5
+          AND status IN ('created','preparing','running','paused')`,
+      [run.organizationId, run.id, run.heartbeatAt ?? null, run.revision, runRevision],
+    );
+    if (runUpdate.rowCount !== 1) {
+      throw new DomainError("revision_conflict", "Task run changed before heartbeat persistence", {
+        runId: run.id,
+        expectedRevision: runRevision,
+      });
+    }
+  }
+
+  async persistLeaseExpiry(lease: Lease, run: TaskRun, task: Task): Promise<void> {
+    const leaseRevision = lease.revision - 1;
+    const runRevision = run.revision - 1;
+    const taskRevision = task.revision - 1;
+
+    const leaseUpdate = await this.#client.query(
+      `UPDATE aop.leases
+          SET status = 'expired', revision = $3
+        WHERE organization_id = $1 AND id = $2 AND revision = $4 AND status = 'active'`,
+      [lease.organizationId, lease.id, lease.revision, leaseRevision],
+    );
+    if (leaseUpdate.rowCount !== 1) {
+      throw new DomainError("revision_conflict", "Lease changed before expiry persistence", {
+        leaseId: lease.id,
+        expectedRevision: leaseRevision,
+      });
+    }
+
+    const runUpdate = await this.#client.query(
+      `UPDATE aop.task_runs
+          SET status = 'lost', finished_at = $3, failure_reason = $4, revision = $5
+        WHERE organization_id = $1 AND id = $2 AND revision = $6
+          AND status IN ('created','preparing','running','paused')`,
+      [run.organizationId, run.id, run.finishedAt ?? null, run.failureReason ?? null, run.revision, runRevision],
+    );
+    if (runUpdate.rowCount !== 1) {
+      throw new DomainError("revision_conflict", "Task run changed before loss persistence", {
+        runId: run.id,
+        expectedRevision: runRevision,
+      });
+    }
+
+    const taskUpdate = await this.#client.query(
+      `UPDATE aop.tasks
+          SET owner_agent_id = NULL, state = 'ready', revision = $3, updated_at = $4,
+              block_reason = NULL, block_detail = NULL, blocked_since = NULL, completed_at = NULL
+        WHERE organization_id = $1 AND id = $2 AND revision = $5
+          AND state IN ('leased','running')`,
+      [task.organizationId, task.id, task.revision, task.updatedAt, taskRevision],
+    );
+    if (taskUpdate.rowCount !== 1) {
+      throw new DomainError("revision_conflict", "Task changed before recovery persistence", {
+        taskId: task.id,
+        expectedRevision: taskRevision,
+      });
+    }
+  }
+
   async listPermissionsForPrincipal(organizationId: OrganizationId, principal: Principal): Promise<readonly Permission[]> {
     const permissionRows = await rows(
       this.#client,
@@ -488,12 +596,11 @@ export class PostgresAuthorizationResolver implements AuthorizationResolver {
   ): Promise<AuthorizationResolution> {
     const tx = authorizationTransaction(transaction);
     const now = this.#now();
-    const [permissions, resolvedRoles] = await Promise.all([
-      tx.listPermissionsForPrincipal(command.organizationId, command.actor),
+    const permissions = await tx.listPermissionsForPrincipal(command.organizationId, command.actor);
+    const resolvedRoles =
       command.actor.type === "agent"
-        ? tx.listActiveRolesForAgent(command.organizationId, command.actor.id as AgentId, now)
-        : Promise.resolve([] as readonly Role[]),
-    ]);
+        ? await tx.listActiveRolesForAgent(command.organizationId, command.actor.id as AgentId, now)
+        : ([] as readonly Role[]);
 
     return {
       policyInput: {
