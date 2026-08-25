@@ -72,7 +72,8 @@ export const ArtifactReportCountsSchema = z
 export const VerifiedProgressSchema = z
   .object({
     eligibleTasks: CountSchema,
-    completedTasks: CountSchema,
+    verifiedCompletedTasks: CountSchema,
+    staleCompletedTasks: CountSchema,
     ratio: z.number().min(0).max(1),
   })
   .strict();
@@ -81,6 +82,12 @@ export const OrganizationReportBlockersSchema = z
   .object({
     blockedTaskIds: z.array(TaskIdSchema),
     staleInputTaskIds: z.array(TaskIdSchema),
+    blockingDecisionIds: z.array(DecisionIdSchema),
+  })
+  .strict();
+
+export const OrganizationReportAttentionSchema = z
+  .object({
     pendingDecisionIds: z.array(DecisionIdSchema),
     reworkReviewIds: z.array(ReviewIdSchema),
   })
@@ -99,6 +106,7 @@ export const OrganizationReportSchema = z
     artifacts: ArtifactReportCountsSchema,
     verifiedProgress: VerifiedProgressSchema,
     blockers: OrganizationReportBlockersSchema,
+    attention: OrganizationReportAttentionSchema,
   })
   .strict();
 
@@ -110,4 +118,5 @@ export type ReviewResultCounts = z.infer<typeof ReviewResultCountsSchema>;
 export type ArtifactReportCounts = z.infer<typeof ArtifactReportCountsSchema>;
 export type VerifiedProgress = z.infer<typeof VerifiedProgressSchema>;
 export type OrganizationReportBlockers = z.infer<typeof OrganizationReportBlockersSchema>;
+export type OrganizationReportAttention = z.infer<typeof OrganizationReportAttentionSchema>;
 export type OrganizationReport = z.infer<typeof OrganizationReportSchema>;
