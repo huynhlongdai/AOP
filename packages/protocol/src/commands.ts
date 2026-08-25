@@ -5,9 +5,11 @@ import {
   ArtifactIdSchema,
   ArtifactVersionIdSchema,
   LeaseIdSchema,
+  ReviewIdSchema,
   TaskIdSchema,
   TaskRunIdSchema,
 } from "./ids.js";
+import { ResourceRefSchema } from "./resource-ref.js";
 
 const CapabilityTokenSchema = z.string().min(2).max(128).regex(/^[a-z][a-z0-9_.:-]+$/);
 const Sha256Schema = z.string().regex(/^sha256:[a-f0-9]{64}$/);
@@ -27,6 +29,14 @@ const ArtifactProductionFieldsSchema = {
   deliverableType: CapabilityTokenSchema.optional(),
   derivedFromVersionIds: z.array(ArtifactVersionIdSchema).max(64).default([]),
 };
+
+const ReviewCriterionInputSchema = z
+  .object({
+    key: CapabilityTokenSchema,
+    description: z.string().trim().min(1).max(500),
+    required: z.boolean(),
+  })
+  .strict();
 
 function validateArtifactProduction(
   payload: { producedByTaskId?: unknown; deliverableType?: unknown; derivedFromVersionIds: readonly string[] },
@@ -69,6 +79,22 @@ export const TaskClaimPayloadSchema = z
       });
     }
   });
+
+export const TaskSubmitReviewPayloadSchema = z
+  .object({
+    reviewId: ReviewIdSchema,
+    criteria: z.array(ReviewCriterionInputSchema).min(1).max(64),
+  })
+  .strict();
+
+export const ReviewResolvePayloadSchema = z
+  .object({
+    taskExpectedRevision: z.number().int().nonnegative(),
+    result: z.enum(["pass", "rework", "fail"]),
+    evidence: z.array(ResourceRefSchema).max(128).default([]),
+    findings: z.array(z.string().trim().min(1).max(1_000)).max(128).default([]),
+  })
+  .strict();
 
 export const LeaseHeartbeatPayloadSchema = z
   .object({
@@ -118,6 +144,8 @@ export const ArtifactRejectPayloadSchema = z
   .strict();
 
 export type TaskClaimPayload = z.infer<typeof TaskClaimPayloadSchema>;
+export type TaskSubmitReviewPayload = z.infer<typeof TaskSubmitReviewPayloadSchema>;
+export type ReviewResolvePayload = z.infer<typeof ReviewResolvePayloadSchema>;
 export type LeaseHeartbeatPayload = z.infer<typeof LeaseHeartbeatPayloadSchema>;
 export type LeaseExpirePayload = z.infer<typeof LeaseExpirePayloadSchema>;
 export type ArtifactCreatePayload = z.infer<typeof ArtifactCreatePayloadSchema>;
