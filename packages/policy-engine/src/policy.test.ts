@@ -45,7 +45,6 @@ const permission = (overrides: Partial<Permission> = {}): Permission => ({
 const base = {
   organizationId: org,
   principal: agent,
-  resource: undefined,
   permissions: [] as Permission[],
   resolvedRoles: [role],
   now,
