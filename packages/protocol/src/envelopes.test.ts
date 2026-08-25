@@ -61,7 +61,7 @@ describe("command/event/context envelopes", () => {
     ).toBe(false);
   });
 
-  it("requires mandatory organizational context classes", () => {
+  it("requires exact mandatory organizational context classes", () => {
     const base = {
       schemaVersion: 1,
       protocolVersion: "0.1.0",
@@ -82,6 +82,7 @@ describe("command/event/context envelopes", () => {
       authorityWeight: 1,
       relevanceWeight: 1,
       tokenEstimate: 10,
+      content: `{"kind":"${kind}"}`,
       digest,
     });
 
@@ -89,12 +90,43 @@ describe("command/event/context envelopes", () => {
       fragment("policy"),
       fragment("identity"),
       fragment("role"),
+      fragment("authority"),
       fragment("goal"),
       fragment("task"),
       fragment("output_contract"),
     ];
 
-    expect(ContextManifestSchema.safeParse({ ...base, fragments, totalTokenEstimate: 60 }).success).toBe(true);
-    expect(ContextManifestSchema.safeParse({ ...base, fragments: fragments.slice(1), totalTokenEstimate: 50 }).success).toBe(false);
+    expect(ContextManifestSchema.safeParse({ ...base, fragments, totalTokenEstimate: 70 }).success).toBe(true);
+    expect(ContextManifestSchema.safeParse({ ...base, fragments: fragments.slice(1), totalTokenEstimate: 60 }).success).toBe(false);
+  });
+
+  it("forbids untrusted context from carrying authority weight", () => {
+    const fragment = {
+      key: "external:web",
+      kind: "external_evidence",
+      trust: "untrusted",
+      mandatory: false,
+      authorityWeight: 0.2,
+      relevanceWeight: 1,
+      tokenEstimate: 10,
+      content: "external text",
+      digest,
+    };
+
+    expect(
+      ContextManifestSchema.safeParse({
+        schemaVersion: 1,
+        protocolVersion: "0.1.0",
+        id: `ctx_${ULID}`,
+        organizationId: `org_${ULID}`,
+        taskId: `tsk_${ULID}`,
+        runId: `run_${ULID}`,
+        agentId: `agt_${ULID}`,
+        taskRevision: 1,
+        fragments: [fragment],
+        totalTokenEstimate: 10,
+        compiledAt: now,
+      }).success,
+    ).toBe(false);
   });
 });
