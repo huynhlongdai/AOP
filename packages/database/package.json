@@ -1,5 +1,24 @@
 {
-  "name": "@aop/database", "version": "0.0.0", "private": true, "type": "module",
-  "main": "./dist/index.js", "types": "./dist/index.d.ts",
-  "exports": { ".": { "types": "./dist/index.d.ts", "import": "./dist/index.js" } }, "files": ["dist"]
+  "name": "@aop/database",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": ["dist"],
+  "dependencies": {
+    "@aop/command-bus": "workspace:*",
+    "@aop/domain": "workspace:*",
+    "@aop/protocol": "workspace:*",
+    "pg": "^8.23.0"
+  },
+  "devDependencies": {
+    "@types/pg": "^8.23.1"
+  }
 }

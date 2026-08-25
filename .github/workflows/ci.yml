@@ -46,7 +46,7 @@ jobs:
         run: pnpm build
 
   database:
-    name: Validate PostgreSQL schema
+    name: Validate PostgreSQL coordination primitives
     runs-on: ubuntu-latest
     timeout-minutes: 15
     services:
@@ -71,6 +71,20 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v7
 
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+
+      - name: Enable pnpm via Corepack
+        run: |
+          corepack enable
+          corepack prepare pnpm@11.21.0 --activate
+          pnpm --version
+
+      - name: Install dependencies
+        run: pnpm install --no-frozen-lockfile
+
       - name: Install PostgreSQL client
         run: |
           sudo apt-get update
@@ -83,5 +97,20 @@ jobs:
             psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f "$migration"
           done
 
-      - name: Validate Slice 0 database constraints
+      - name: Validate database constraints
         run: psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f packages/database/tests/slice0_constraints.sql
+
+      - name: Validate Query Store against PostgreSQL
+        run: pnpm exec vitest run packages/database/src/query-store.integration.test.ts
+
+      - name: Validate durable Outbox against PostgreSQL
+        run: pnpm exec vitest run packages/event-bus/src/outbox-store.integration.test.ts
+
+      - name: Validate task.claim coordination against PostgreSQL
+        run: pnpm exec vitest run packages/database/src/task-claim.integration.test.ts
+
+      - name: Validate Scheduler candidates against PostgreSQL
+        run: pnpm exec vitest run packages/scheduler/src/postgres-candidate-store.integration.test.ts
+
+      - name: Validate lease heartbeat and recovery against PostgreSQL
+        run: pnpm exec vitest run packages/database/src/lease-recovery.integration.test.ts

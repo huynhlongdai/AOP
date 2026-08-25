@@ -71,7 +71,9 @@ export function returnTaskToReadyAfterRunLoss(
   updatedAt: string,
 ): Task {
   assertCurrentState(current, ["leased", "running"], "return to ready after run loss");
-  return TaskSchema.parse(transitionBase(current, "ready", expectedRevision, updatedAt));
+  const candidate = transitionBase(current, "ready", expectedRevision, updatedAt);
+  delete candidate.ownerAgentId;
+  return TaskSchema.parse(candidate);
 }
 
 export function blockTask(
