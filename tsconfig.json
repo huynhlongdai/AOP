@@ -1,0 +1,24 @@
+{
+  "files": [],
+  "references": [
+    { "path": "./apps/api" },
+    { "path": "./apps/worker" },
+    { "path": "./apps/web" },
+    { "path": "./apps/sandbox-runner" },
+    { "path": "./packages/protocol" },
+    { "path": "./packages/domain" },
+    { "path": "./packages/database" },
+    { "path": "./packages/command-bus" },
+    { "path": "./packages/event-bus" },
+    { "path": "./packages/policy-engine" },
+    { "path": "./packages/scheduler" },
+    { "path": "./packages/artifact-store" },
+    { "path": "./packages/context-engine" },
+    { "path": "./packages/runtime" },
+    { "path": "./packages/runtime-openai" },
+    { "path": "./packages/runtime-a2a" },
+    { "path": "./packages/tools-mcp" },
+    { "path": "./packages/observability" },
+    { "path": "./packages/testing" }
+  ]
+}

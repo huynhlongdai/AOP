@@ -1,0 +1,25 @@
+{
+  "name": "aop",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Agent Organization Protocol and Organization Kernel",
+  "type": "module",
+  "packageManager": "pnpm@11.21.0",
+  "engines": {
+    "node": ">=22.16.0"
+  },
+  "scripts": {
+    "build": "tsc -b",
+    "typecheck": "tsc -b --pretty false",
+    "test": "vitest run --passWithNoTests",
+    "test:watch": "vitest",
+    "lint": "biome check apps packages vitest.config.ts",
+    "format": "biome format --write apps packages vitest.config.ts",
+    "check": "pnpm lint && pnpm typecheck && pnpm test && pnpm build"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "^2.5.0",
+    "typescript": "^6.0.0",
+    "vitest": "^4.1.0"
+  }
+}
