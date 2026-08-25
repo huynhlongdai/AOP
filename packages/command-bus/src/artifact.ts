@@ -22,7 +22,7 @@ import {
   type TaskId,
 } from "@aop/protocol";
 
-import type { CommandHandler, CommandMutation, CommandTransaction } from "./contracts.js";
+import type { CommandHandler, CommandMutation, CommandTransaction, EventDraft } from "./contracts.js";
 
 export interface ArtifactProductionReferenceCheck {
   readonly taskMissing: boolean;
@@ -49,7 +49,7 @@ export interface ArtifactWriteTransaction extends CommandTransaction {
     artifact: Artifact,
     version: ArtifactVersion,
     previousApprovedVersion?: ArtifactVersion,
-  ): Promise<void>;
+  ): Promise<readonly TaskId[]>;
 }
 
 function artifactTransaction(transaction: CommandTransaction): ArtifactWriteTransaction {
@@ -381,30 +381,51 @@ export class ArtifactApproveHandler implements CommandHandler {
       command.expectedRevision as number,
       previousApproved,
     );
-    await loaded.tx.persistArtifactLifecycle(result.artifact, result.version, result.supersededVersion);
+    const invalidatedTaskIds = await loaded.tx.persistArtifactLifecycle(
+      result.artifact,
+      result.version,
+      result.supersededVersion,
+    );
+
+    const events: EventDraft[] = [
+      {
+        type: "artifact.approved",
+        aggregate: { type: "artifact", id: result.artifact.id },
+        aggregateRevision: result.artifact.revision,
+        correlationId: command.commandId,
+        payload: {
+          approvedVersionId: result.version.id,
+          version: result.version.version,
+          previousApprovedVersionId: result.supersededVersion?.id ?? null,
+        },
+      },
+      {
+        type: "artifact_version.approved",
+        aggregate: { type: "artifact_version", id: result.version.id },
+        aggregateRevision: 0,
+        correlationId: command.commandId,
+        payload: { artifactId: result.artifact.id, approvedBy: command.actor, approvedAt },
+      },
+    ];
+
+    if (result.supersededVersion !== undefined && invalidatedTaskIds.length > 0) {
+      events.push({
+        type: "artifact.consumers_invalidated",
+        aggregate: { type: "artifact", id: result.artifact.id },
+        aggregateRevision: result.artifact.revision,
+        correlationId: command.commandId,
+        payload: {
+          supersededVersionId: result.supersededVersion.id,
+          replacementVersionId: result.version.id,
+          taskIds: [...invalidatedTaskIds],
+          conservativePolicy: true,
+        },
+      });
+    }
 
     return {
       resultingRevision: result.artifact.revision,
-      events: [
-        {
-          type: "artifact.approved",
-          aggregate: { type: "artifact", id: result.artifact.id },
-          aggregateRevision: result.artifact.revision,
-          correlationId: command.commandId,
-          payload: {
-            approvedVersionId: result.version.id,
-            version: result.version.version,
-            previousApprovedVersionId: result.supersededVersion?.id ?? null,
-          },
-        },
-        {
-          type: "artifact_version.approved",
-          aggregate: { type: "artifact_version", id: result.version.id },
-          aggregateRevision: 0,
-          correlationId: command.commandId,
-          payload: { artifactId: result.artifact.id, approvedBy: command.actor, approvedAt },
-        },
-      ],
+      events,
     };
   }
 }
