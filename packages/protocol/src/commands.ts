@@ -4,6 +4,7 @@ import {
   AgentIdSchema,
   ArtifactIdSchema,
   ArtifactVersionIdSchema,
+  DecisionIdSchema,
   LeaseIdSchema,
   ReviewIdSchema,
   TaskIdSchema,
@@ -35,6 +36,14 @@ const ReviewCriterionInputSchema = z
     key: CapabilityTokenSchema,
     description: z.string().trim().min(1).max(500),
     required: z.boolean(),
+  })
+  .strict();
+
+const DecisionOptionInputSchema = z
+  .object({
+    id: z.string().min(1).max(64).regex(/^[a-zA-Z0-9_.:-]+$/),
+    label: z.string().trim().min(1).max(240),
+    description: z.string().trim().max(2_000).optional(),
   })
   .strict();
 
@@ -143,6 +152,42 @@ export const ArtifactRejectPayloadSchema = z
   })
   .strict();
 
+export const DecisionCreatePayloadSchema = z
+  .object({
+    decisionId: DecisionIdSchema,
+    scope: CapabilityTokenSchema,
+    question: z.string().trim().min(1).max(4_000),
+    options: z.array(DecisionOptionInputSchema).min(1).max(32),
+    authorityCapability: CapabilityTokenSchema,
+    affectedResources: z.array(ResourceRefSchema).max(256).default([]),
+    supersedesDecisionId: DecisionIdSchema.optional(),
+  })
+  .strict()
+  .superRefine((payload, ctx) => {
+    if (payload.supersedesDecisionId === payload.decisionId) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["supersedesDecisionId"],
+        message: "Decision cannot supersede itself",
+      });
+    }
+    const optionIds = payload.options.map((option) => option.id);
+    if (new Set(optionIds).size !== optionIds.length) {
+      ctx.addIssue({ code: "custom", path: ["options"], message: "Decision option IDs must be unique" });
+    }
+  });
+
+export const DecisionRequestApprovalPayloadSchema = z.object({}).strict();
+
+export const DecisionActivatePayloadSchema = z
+  .object({
+    selectedOptionId: z.string().min(1).max(64),
+    rationale: z.string().trim().min(1).max(4_000),
+  })
+  .strict();
+
+export const DecisionRejectPayloadSchema = z.object({}).strict();
+
 export type TaskClaimPayload = z.infer<typeof TaskClaimPayloadSchema>;
 export type TaskSubmitReviewPayload = z.infer<typeof TaskSubmitReviewPayloadSchema>;
 export type ReviewResolvePayload = z.infer<typeof ReviewResolvePayloadSchema>;
@@ -153,3 +198,7 @@ export type ArtifactRevisePayload = z.infer<typeof ArtifactRevisePayloadSchema>;
 export type ArtifactSubmitReviewPayload = z.infer<typeof ArtifactSubmitReviewPayloadSchema>;
 export type ArtifactApprovePayload = z.infer<typeof ArtifactApprovePayloadSchema>;
 export type ArtifactRejectPayload = z.infer<typeof ArtifactRejectPayloadSchema>;
+export type DecisionCreatePayload = z.infer<typeof DecisionCreatePayloadSchema>;
+export type DecisionRequestApprovalPayload = z.infer<typeof DecisionRequestApprovalPayloadSchema>;
+export type DecisionActivatePayload = z.infer<typeof DecisionActivatePayloadSchema>;
+export type DecisionRejectPayload = z.infer<typeof DecisionRejectPayloadSchema>;
