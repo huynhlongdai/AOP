@@ -84,6 +84,7 @@ CREATE TABLE aop.task_runs (
   revision bigint NOT NULL DEFAULT 0 CHECK (revision >= 0),
   CONSTRAINT task_runs_org_id_unique UNIQUE (organization_id, id),
   CONSTRAINT task_runs_attempt_unique UNIQUE (organization_id, task_id, attempt),
+  CONSTRAINT task_runs_lease_identity_unique UNIQUE (organization_id, id, task_id, agent_id, attempt),
   CONSTRAINT task_runs_task_fk FOREIGN KEY (organization_id, task_id)
     REFERENCES aop.tasks(organization_id, id)
     ON DELETE CASCADE,
@@ -113,8 +114,8 @@ CREATE TABLE aop.leases (
   CONSTRAINT leases_task_fk FOREIGN KEY (organization_id, task_id)
     REFERENCES aop.tasks(organization_id, id)
     ON DELETE CASCADE,
-  CONSTRAINT leases_run_fk FOREIGN KEY (organization_id, run_id)
-    REFERENCES aop.task_runs(organization_id, id)
+  CONSTRAINT leases_run_identity_fk FOREIGN KEY (organization_id, run_id, task_id, agent_id, attempt)
+    REFERENCES aop.task_runs(organization_id, id, task_id, agent_id, attempt)
     ON DELETE CASCADE,
   CONSTRAINT leases_agent_membership_fk FOREIGN KEY (organization_id, agent_id)
     REFERENCES aop.organization_memberships(organization_id, agent_id)
