@@ -35,7 +35,6 @@ export interface RuntimeCommandProposal {
   readonly type: string;
   readonly target?: ResourceRef;
   readonly expectedRevision?: number;
-  readonly idempotencyKey?: string;
   readonly payload: Readonly<Record<string, unknown>>;
 }
 
@@ -91,6 +90,7 @@ export interface KernelCommandSubmission {
   readonly organizationId: OrganizationId;
   readonly runId: TaskRunId;
   readonly agentId: AgentId;
+  readonly proposalIndex: number;
   readonly proposal: RuntimeCommandProposal;
 }
 
@@ -263,23 +263,32 @@ export class RuntimeManager {
       throw new Error("Runtime adapter identity mismatch during prepare");
     }
 
-    await this.#kernel.recordPrepared({
-      organizationId: input.organizationId,
-      runId: input.runId,
-      agentId: input.agent.id,
-      runtimeId: prepared.runtimeId,
-      adapter: prepared.adapter,
-      ...(prepared.provider === undefined ? {} : { provider: prepared.provider }),
-      ...(prepared.model === undefined ? {} : { model: prepared.model }),
-      contextManifestId: context.id,
-      traceRefs: prepared.traceRefs,
-    });
-    await this.#kernel.recordRunning({
-      organizationId: input.organizationId,
-      runId: input.runId,
-      agentId: input.agent.id,
-      runtimeId: prepared.runtimeId,
-    });
+    try {
+      await this.#kernel.recordPrepared({
+        organizationId: input.organizationId,
+        runId: input.runId,
+        agentId: input.agent.id,
+        runtimeId: prepared.runtimeId,
+        adapter: prepared.adapter,
+        ...(prepared.provider === undefined ? {} : { provider: prepared.provider }),
+        ...(prepared.model === undefined ? {} : { model: prepared.model }),
+        contextManifestId: context.id,
+        traceRefs: prepared.traceRefs,
+      });
+      await this.#kernel.recordRunning({
+        organizationId: input.organizationId,
+        runId: input.runId,
+        agentId: input.agent.id,
+        runtimeId: prepared.runtimeId,
+      });
+    } catch (error) {
+      try {
+        await this.#adapter.cancel(prepared.runtimeId, "kernel_lifecycle_record_failed");
+      } catch {
+        // Preserve the trusted control-plane failure as the primary error.
+      }
+      throw error;
+    }
 
     const startedAt = this.#now();
     let execution: RuntimeExecutionResult;
@@ -315,7 +324,7 @@ export class RuntimeManager {
     const commandOutcomes: RuntimeCommandOutcome[] = [];
     if (execution.status === "succeeded") {
       const allowed = new Set(input.policy.allowedCommandTypes);
-      for (const proposal of execution.commandProposals) {
+      for (const [proposalIndex, proposal] of execution.commandProposals.entries()) {
         if (!COMMAND_TYPE_PATTERN.test(proposal.type)) {
           commandOutcomes.push({ proposal, forwarded: false, denialReason: "invalid_command_type" });
           continue;
@@ -324,13 +333,26 @@ export class RuntimeManager {
           commandOutcomes.push({ proposal, forwarded: false, denialReason: "command_not_allowed_by_execution_policy" });
           continue;
         }
-        const result = await this.#kernel.submitAgentCommand({
-          organizationId: input.organizationId,
-          runId: input.runId,
-          agentId: input.agent.id,
-          proposal,
-        });
-        commandOutcomes.push({ proposal, forwarded: true, result });
+        try {
+          const result = await this.#kernel.submitAgentCommand({
+            organizationId: input.organizationId,
+            runId: input.runId,
+            agentId: input.agent.id,
+            proposalIndex,
+            proposal,
+          });
+          commandOutcomes.push({ proposal, forwarded: true, result });
+        } catch (error) {
+          const reason = normalizeFailure(error);
+          commandOutcomes.push({ proposal, forwarded: true, denialReason: `kernel_submission_failed:${reason}` });
+          execution = {
+            ...execution,
+            status: "failed",
+            commandProposals: [],
+            failureReason: `Kernel command submission failed for proposal ${proposalIndex}: ${reason}`,
+          };
+          break;
+        }
       }
     }
 
