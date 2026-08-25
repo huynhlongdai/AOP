@@ -30,9 +30,9 @@ describe("Task DAG service", () => {
     expect(() => addTaskDependency(second, edge(taskC, taskA))).toThrow(DomainError);
   });
 
-  it("rejects duplicate edges", () => {
-    const first = addTaskDependency([], edge(taskA, taskB));
-    expect(() => addTaskDependency(first, edge(taskA, taskB))).toThrow(DomainError);
+  it("rejects duplicate endpoints even when dependency type differs", () => {
+    const first = addTaskDependency([], edge(taskA, taskB, "hard"));
+    expect(() => addTaskDependency(first, edge(taskA, taskB, "soft"))).toThrow(DomainError);
   });
 
   it("only hard dependencies block readiness", () => {
