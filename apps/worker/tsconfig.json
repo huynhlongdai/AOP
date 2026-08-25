@@ -9,6 +9,9 @@
   "include": ["src/**/*.ts"],
   "exclude": ["src/**/*.test.ts"],
   "references": [
-    { "path": "../../packages/event-bus" }
+    { "path": "../../packages/command-bus" },
+    { "path": "../../packages/database" },
+    { "path": "../../packages/event-bus" },
+    { "path": "../../packages/scheduler" }
   ]
 }
