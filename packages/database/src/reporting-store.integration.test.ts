@@ -36,7 +36,11 @@ const supersededDecisionId = `dec_${ulid(83)}`;
 const artifactId = `art_${ulid(81)}`;
 const staleVersionId = `arv_${ulid(81)}`;
 const currentVersionId = `arv_${ulid(82)}`;
+const completedArtifactId = `art_${ulid(82)}`;
+const completedBaseVersionId = `arv_${ulid(83)}`;
+const completedNextVersionId = `arv_${ulid(84)}`;
 const now = "2026-08-25T15:00:00.000Z";
+const later = "2026-08-25T15:05:00.000Z";
 const checksum = (digit: string) => `sha256:${digit.repeat(64)}`;
 
 async function cleanup(): Promise<void> {
@@ -169,12 +173,6 @@ async function seed(): Promise<void> {
       reworkTaskId,
     ],
   );
-  await pool.query(
-    `UPDATE aop.tasks
-        SET state = 'completed', completed_at = $3, revision = 2, updated_at = $3
-      WHERE organization_id = $1 AND id = $2`,
-    [orgId, completedTaskId, now],
-  );
 
   await pool.query(
     `INSERT INTO aop.decisions (
@@ -187,7 +185,14 @@ async function seed(): Promise<void> {
        ($3,$4,'engineering.architecture','Historical choice','[{"id":"a","label":"A"}]','a','Historical choice','human',$5,'decision.architecture.approve','superseded','human',$5,$6,3,$6,$6)`,
     [activeDecisionId, pendingDecisionId, supersededDecisionId, orgId, ownerId, now],
   );
+  await pool.query(
+    `INSERT INTO aop.decision_impacts (
+       organization_id, decision_id, resource_type, resource_id, impact_type, detail, created_at
+     ) VALUES ($1,$2,'task',$3,'blocks','Task waits for this pending architecture decision',$4)`,
+    [orgId, pendingDecisionId, blockedTaskId, now],
+  );
 
+  // Artifact A is already superseded and proves current stale-work reporting.
   await pool.query(
     `INSERT INTO aop.artifacts (
        id, organization_id, type, title, current_approved_version_id, revision, created_at, updated_at
@@ -225,6 +230,51 @@ async function seed(): Promise<void> {
     `INSERT INTO aop.task_artifact_inputs (organization_id, task_id, artifact_version_id, required, created_at)
      VALUES ($1,$2,$3,true,$4)`,
     [orgId, runningTaskId, staleVersionId, now],
+  );
+
+  // Artifact B is current when the completed Task is reviewed and completed.
+  // A regression test later supersedes it to prove verified progress is revoked.
+  await pool.query(
+    `INSERT INTO aop.artifacts (
+       id, organization_id, type, title, current_approved_version_id, revision, created_at, updated_at
+     ) VALUES ($1,$2,'requirements.spec','Completion contract',NULL,0,$3,$3)`,
+    [completedArtifactId, orgId, now],
+  );
+  await pool.query(
+    `INSERT INTO aop.artifact_versions (
+       id, organization_id, artifact_id, version, status, created_by_type, created_by_id,
+       content_uri, mime_type, checksum, size_bytes, approved_by_type, approved_by_id, approved_at, created_at
+     ) VALUES ($1,$2,$3,1,'approved','agent',$4,$5,'application/json',$6,80,'agent',$7,$8,$8)`,
+    [
+      completedBaseVersionId,
+      orgId,
+      completedArtifactId,
+      workerId,
+      `aop://${orgId}/artifacts/${completedArtifactId}/versions/${completedBaseVersionId}`,
+      checksum("3"),
+      reviewerId,
+      now,
+    ],
+  );
+  await pool.query(
+    `UPDATE aop.artifacts
+        SET current_approved_version_id = $3, revision = 1, updated_at = $4
+      WHERE organization_id = $1 AND id = $2`,
+    [orgId, completedArtifactId, completedBaseVersionId, now],
+  );
+  await pool.query(
+    `INSERT INTO aop.task_artifact_inputs (organization_id, task_id, artifact_version_id, required, created_at)
+     VALUES ($1,$2,$3,true,$4)`,
+    [orgId, completedTaskId, completedBaseVersionId, now],
+  );
+
+  // Completion occurs while all required inputs are current, so the DB
+  // completion guard accepts the matching passing Review.
+  await pool.query(
+    `UPDATE aop.tasks
+        SET state = 'completed', completed_at = $3, revision = 2, updated_at = $3
+      WHERE organization_id = $1 AND id = $2`,
+    [orgId, completedTaskId, now],
   );
 
   await pool.query(
@@ -301,11 +351,19 @@ describeDb("PostgreSQL verified organizational reporting", () => {
         superseded: 1,
       },
       reviews: { pending: 1, pass: 1, rework: 1, fail: 0 },
-      artifacts: { total: 1, withCurrentApprovedVersion: 1, staleConsumerLinks: 1 },
-      verifiedProgress: { eligibleTasks: 5, completedTasks: 1, ratio: 0.2 },
+      artifacts: { total: 2, withCurrentApprovedVersion: 2, staleConsumerLinks: 1 },
+      verifiedProgress: {
+        eligibleTasks: 5,
+        verifiedCompletedTasks: 1,
+        staleCompletedTasks: 0,
+        ratio: 0.2,
+      },
       blockers: {
         blockedTaskIds: [blockedTaskId],
         staleInputTaskIds: [runningTaskId],
+        blockingDecisionIds: [pendingDecisionId],
+      },
+      attention: {
         pendingDecisionIds: [pendingDecisionId],
         reworkReviewIds: [reworkReviewId],
       },
@@ -325,6 +383,59 @@ describeDb("PostgreSQL verified organizational reporting", () => {
     const report = await store.getOrganizationReport(orgId);
     expect(report?.artifacts.staleConsumerLinks).toBe(0);
     expect(report?.blockers.staleInputTaskIds).toEqual([]);
+  });
+
+  it("revokes verified progress when an input becomes stale after Task completion", async () => {
+    if (pool === undefined) return;
+    const store = new PostgresReportingStore(pool, () => now);
+    expect((await store.getOrganizationReport(orgId))?.verifiedProgress).toEqual({
+      eligibleTasks: 5,
+      verifiedCompletedTasks: 1,
+      staleCompletedTasks: 0,
+      ratio: 0.2,
+    });
+
+    await pool.query(
+      `INSERT INTO aop.artifact_versions (
+         id, organization_id, artifact_id, version, status, created_by_type, created_by_id,
+         content_uri, mime_type, checksum, size_bytes, supersedes_version_id,
+         approved_by_type, approved_by_id, approved_at, created_at
+       ) VALUES ($1,$2,$3,2,'approved','agent',$4,$5,'application/json',$6,90,$7,'agent',$8,$9,$9)`,
+      [
+        completedNextVersionId,
+        orgId,
+        completedArtifactId,
+        workerId,
+        `aop://${orgId}/artifacts/${completedArtifactId}/versions/${completedNextVersionId}`,
+        checksum("4"),
+        completedBaseVersionId,
+        reviewerId,
+        later,
+      ],
+    );
+    await pool.query(
+      `UPDATE aop.artifact_versions
+          SET status = 'superseded'
+        WHERE organization_id = $1 AND artifact_id = $2 AND id = $3`,
+      [orgId, completedArtifactId, completedBaseVersionId],
+    );
+    await pool.query(
+      `UPDATE aop.artifacts
+          SET current_approved_version_id = $3, revision = 2, updated_at = $4
+        WHERE organization_id = $1 AND id = $2`,
+      [orgId, completedArtifactId, completedNextVersionId, later],
+    );
+
+    const report = await store.getOrganizationReport(orgId);
+    expect(report?.tasks.completed).toBe(1);
+    expect(report?.verifiedProgress).toEqual({
+      eligibleTasks: 5,
+      verifiedCompletedTasks: 0,
+      staleCompletedTasks: 1,
+      ratio: 0,
+    });
+    expect(report?.artifacts.staleConsumerLinks).toBe(2);
+    expect(report?.blockers.staleInputTaskIds).toEqual([completedTaskId, runningTaskId]);
   });
 
   it("returns undefined instead of fabricating a report for an unknown Organization", async () => {
