@@ -1,7 +1,17 @@
-import { addArtifactDraftVersion, createArtifactWithInitialDraft, DomainError } from "@aop/domain";
 import {
+  addArtifactDraftVersion,
+  approveArtifactVersion,
+  createArtifactWithInitialDraft,
+  DomainError,
+  rejectArtifactVersion,
+  submitArtifactVersionForReview,
+} from "@aop/domain";
+import {
+  ArtifactApprovePayloadSchema,
   ArtifactCreatePayloadSchema,
+  ArtifactRejectPayloadSchema,
   ArtifactRevisePayloadSchema,
+  ArtifactSubmitReviewPayloadSchema,
   ArtifactVersionSchema,
   type Artifact,
   type ArtifactId,
@@ -23,6 +33,11 @@ export interface ArtifactWriteTransaction extends CommandTransaction {
   lockArtifactCreateIdentity(organizationId: OrganizationId, artifactId: ArtifactId): Promise<Artifact | undefined>;
   lockArtifact(organizationId: OrganizationId, artifactId: ArtifactId): Promise<Artifact | undefined>;
   latestArtifactVersion(organizationId: OrganizationId, artifactId: ArtifactId): Promise<ArtifactVersion | undefined>;
+  artifactVersionById(
+    organizationId: OrganizationId,
+    artifactId: ArtifactId,
+    versionId: ArtifactVersionId,
+  ): Promise<ArtifactVersion | undefined>;
   checkArtifactProductionReferences(
     organizationId: OrganizationId,
     producedByTaskId: TaskId | undefined,
@@ -30,6 +45,11 @@ export interface ArtifactWriteTransaction extends CommandTransaction {
   ): Promise<ArtifactProductionReferenceCheck>;
   persistArtifactCreate(artifact: Artifact, version: ArtifactVersion, deliverableType?: string): Promise<void>;
   persistArtifactRevision(artifact: Artifact, version: ArtifactVersion, deliverableType?: string): Promise<void>;
+  persistArtifactLifecycle(
+    artifact: Artifact,
+    version: ArtifactVersion,
+    previousApprovedVersion?: ArtifactVersion,
+  ): Promise<void>;
 }
 
 function artifactTransaction(transaction: CommandTransaction): ArtifactWriteTransaction {
@@ -38,9 +58,11 @@ function artifactTransaction(transaction: CommandTransaction): ArtifactWriteTran
     typeof candidate.lockArtifactCreateIdentity !== "function" ||
     typeof candidate.lockArtifact !== "function" ||
     typeof candidate.latestArtifactVersion !== "function" ||
+    typeof candidate.artifactVersionById !== "function" ||
     typeof candidate.checkArtifactProductionReferences !== "function" ||
     typeof candidate.persistArtifactCreate !== "function" ||
-    typeof candidate.persistArtifactRevision !== "function"
+    typeof candidate.persistArtifactRevision !== "function" ||
+    typeof candidate.persistArtifactLifecycle !== "function"
   ) {
     throw new DomainError("internal_error", "Command store does not support Artifact write transactions");
   }
@@ -49,7 +71,7 @@ function artifactTransaction(transaction: CommandTransaction): ArtifactWriteTran
 
 function targetArtifactId(command: CommandEnvelope): ArtifactId {
   if (command.target?.type !== "artifact") {
-    throw new DomainError("validation_error", "artifact.revise requires an Artifact target");
+    throw new DomainError("validation_error", `${command.type} requires an Artifact target`);
   }
   return command.target.id as ArtifactId;
 }
@@ -81,6 +103,30 @@ function artifactVersionCreatedEvent(version: ArtifactVersion, deliverableType: 
       supersedesVersionId: version.supersedesVersionId ?? null,
     },
   };
+}
+
+async function loadLatestLifecycleTarget(
+  command: CommandEnvelope,
+  versionId: ArtifactVersionId,
+  transaction: CommandTransaction,
+): Promise<{ artifact: Artifact; version: ArtifactVersion; tx: ArtifactWriteTransaction }> {
+  if (command.expectedRevision === undefined) {
+    throw new DomainError("validation_error", `${command.type} requires expectedRevision`);
+  }
+  const artifactId = targetArtifactId(command);
+  const tx = artifactTransaction(transaction);
+  const artifact = await tx.lockArtifact(command.organizationId, artifactId);
+  if (artifact === undefined) throw new DomainError("not_found", "Artifact was not found", { artifactId });
+  const latest = await tx.latestArtifactVersion(command.organizationId, artifactId);
+  if (latest === undefined) throw new DomainError("invariant_violation", "Artifact has no version history", { artifactId });
+  if (latest.id !== versionId) {
+    throw new DomainError("revision_conflict", "Artifact lifecycle command targets a stale version", {
+      artifactId,
+      requestedVersionId: versionId,
+      latestVersionId: latest.id,
+    });
+  }
+  return { artifact, version: latest, tx };
 }
 
 export class ArtifactCreateHandler implements CommandHandler {
@@ -249,6 +295,153 @@ export class ArtifactReviseHandler implements CommandHandler {
         {
           ...artifactVersionCreatedEvent(revised.version, payload.data.deliverableType),
           correlationId: command.commandId,
+        },
+      ],
+    };
+  }
+}
+
+export class ArtifactSubmitReviewHandler implements CommandHandler {
+  readonly type = "artifact.submit_review";
+  readonly capability = "artifact.submit_review";
+  readonly requiresExpectedRevision = true;
+
+  readonly #now: () => string;
+
+  constructor(now: () => string) {
+    this.#now = now;
+  }
+
+  async execute(command: CommandEnvelope, transaction: CommandTransaction): Promise<CommandMutation> {
+    const payload = ArtifactSubmitReviewPayloadSchema.safeParse(command.payload);
+    if (!payload.success) {
+      throw new DomainError("validation_error", "artifact.submit_review payload is invalid", { issues: payload.error.issues });
+    }
+    const loaded = await loadLatestLifecycleTarget(command, payload.data.versionId, transaction);
+    const result = submitArtifactVersionForReview(
+      loaded.artifact,
+      loaded.version,
+      command.expectedRevision as number,
+      this.#now(),
+    );
+    await loaded.tx.persistArtifactLifecycle(result.artifact, result.version);
+    return {
+      resultingRevision: result.artifact.revision,
+      events: [
+        {
+          type: "artifact_version.review_submitted",
+          aggregate: { type: "artifact_version", id: result.version.id },
+          aggregateRevision: 0,
+          correlationId: command.commandId,
+          payload: { artifactId: result.artifact.id, version: result.version.version },
+        },
+      ],
+    };
+  }
+}
+
+export class ArtifactApproveHandler implements CommandHandler {
+  readonly type = "artifact.approve";
+  readonly capability = "artifact.approve";
+  readonly requiresExpectedRevision = true;
+
+  readonly #now: () => string;
+
+  constructor(now: () => string) {
+    this.#now = now;
+  }
+
+  async execute(command: CommandEnvelope, transaction: CommandTransaction): Promise<CommandMutation> {
+    const payload = ArtifactApprovePayloadSchema.safeParse(command.payload);
+    if (!payload.success) {
+      throw new DomainError("validation_error", "artifact.approve payload is invalid", { issues: payload.error.issues });
+    }
+    const loaded = await loadLatestLifecycleTarget(command, payload.data.versionId, transaction);
+    const previousApproved =
+      loaded.artifact.currentApprovedVersionId === undefined
+        ? undefined
+        : await loaded.tx.artifactVersionById(
+            command.organizationId,
+            loaded.artifact.id,
+            loaded.artifact.currentApprovedVersionId,
+          );
+    if (loaded.artifact.currentApprovedVersionId !== undefined && previousApproved === undefined) {
+      throw new DomainError("invariant_violation", "Artifact current approved version is missing", {
+        artifactId: loaded.artifact.id,
+        versionId: loaded.artifact.currentApprovedVersionId,
+      });
+    }
+
+    const approvedAt = this.#now();
+    const result = approveArtifactVersion(
+      loaded.artifact,
+      loaded.version,
+      command.actor,
+      approvedAt,
+      command.expectedRevision as number,
+      previousApproved,
+    );
+    await loaded.tx.persistArtifactLifecycle(result.artifact, result.version, result.supersededVersion);
+
+    return {
+      resultingRevision: result.artifact.revision,
+      events: [
+        {
+          type: "artifact.approved",
+          aggregate: { type: "artifact", id: result.artifact.id },
+          aggregateRevision: result.artifact.revision,
+          correlationId: command.commandId,
+          payload: {
+            approvedVersionId: result.version.id,
+            version: result.version.version,
+            previousApprovedVersionId: result.supersededVersion?.id ?? null,
+          },
+        },
+        {
+          type: "artifact_version.approved",
+          aggregate: { type: "artifact_version", id: result.version.id },
+          aggregateRevision: 0,
+          correlationId: command.commandId,
+          payload: { artifactId: result.artifact.id, approvedBy: command.actor, approvedAt },
+        },
+      ],
+    };
+  }
+}
+
+export class ArtifactRejectHandler implements CommandHandler {
+  readonly type = "artifact.reject";
+  readonly capability = "artifact.reject";
+  readonly requiresExpectedRevision = true;
+
+  readonly #now: () => string;
+
+  constructor(now: () => string) {
+    this.#now = now;
+  }
+
+  async execute(command: CommandEnvelope, transaction: CommandTransaction): Promise<CommandMutation> {
+    const payload = ArtifactRejectPayloadSchema.safeParse(command.payload);
+    if (!payload.success) {
+      throw new DomainError("validation_error", "artifact.reject payload is invalid", { issues: payload.error.issues });
+    }
+    const loaded = await loadLatestLifecycleTarget(command, payload.data.versionId, transaction);
+    const result = rejectArtifactVersion(
+      loaded.artifact,
+      loaded.version,
+      command.expectedRevision as number,
+      this.#now(),
+    );
+    await loaded.tx.persistArtifactLifecycle(result.artifact, result.version);
+    return {
+      resultingRevision: result.artifact.revision,
+      events: [
+        {
+          type: "artifact_version.rejected",
+          aggregate: { type: "artifact_version", id: result.version.id },
+          aggregateRevision: 0,
+          correlationId: command.commandId,
+          payload: { artifactId: result.artifact.id, version: result.version.version },
         },
       ],
     };
