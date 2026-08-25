@@ -1,6 +1,6 @@
 import * as z from "zod";
 
-import { OrganizationIdSchema, TaskIdSchema } from "./ids.js";
+import { ArtifactVersionIdSchema, OrganizationIdSchema, TaskIdSchema } from "./ids.js";
 import {
   AgentSchema,
   OrganizationMembershipSchema,
@@ -32,7 +32,7 @@ export const OrganizationSnapshotSchema = z
 
 export const TaskOutputRefSchema = z
   .object({
-    artifactVersionId: z.string().min(1),
+    artifactVersionId: ArtifactVersionIdSchema,
     deliverableType: z.string().min(1).max(128),
   })
   .strict();
