@@ -1,4 +1,16 @@
 {
-  "extends": "../../tsconfig.base.json", "compilerOptions": { "composite": true, "rootDir": "src", "outDir": "dist", "tsBuildInfoFile": "dist/.tsbuildinfo" },
-  "include": ["src/**/*.ts"], "exclude": ["src/**/*.test.ts"]
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "composite": true,
+    "rootDir": "src",
+    "outDir": "dist",
+    "tsBuildInfoFile": "dist/.tsbuildinfo"
+  },
+  "references": [
+    { "path": "../protocol" },
+    { "path": "../domain" },
+    { "path": "../policy-engine" }
+  ],
+  "include": ["src/**/*.ts"],
+  "exclude": ["src/**/*.test.ts"]
 }
