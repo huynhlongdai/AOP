@@ -104,6 +104,26 @@ function roleCandidates(input: PolicyEvaluationInput): readonly Candidate[] {
   return candidates;
 }
 
+function publicDecision(candidate: Candidate): PolicyDecision {
+  if (candidate.permissionId !== undefined) {
+    return {
+      effect: candidate.effect,
+      source: candidate.source,
+      reason: candidate.reason,
+      permissionId: candidate.permissionId,
+    };
+  }
+  if (candidate.roleId !== undefined) {
+    return {
+      effect: candidate.effect,
+      source: candidate.source,
+      reason: candidate.reason,
+      roleId: candidate.roleId,
+    };
+  }
+  return { effect: candidate.effect, source: candidate.source, reason: candidate.reason };
+}
+
 export function evaluatePolicy(input: PolicyEvaluationInput): PolicyDecision {
   const candidates = [...permissionCandidates(input), ...roleCandidates(input)].sort(
     (left, right) => right.effectRank - left.effectRank || right.sourceRank - left.sourceRank,
@@ -118,6 +138,5 @@ export function evaluatePolicy(input: PolicyEvaluationInput): PolicyDecision {
     };
   }
 
-  const { effectRank: _effectRank, sourceRank: _sourceRank, ...decision } = winner;
-  return decision;
+  return publicDecision(winner);
 }
