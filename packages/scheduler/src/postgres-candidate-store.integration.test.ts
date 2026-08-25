@@ -18,6 +18,8 @@ const now = "2026-08-25T08:10:00.000Z";
 
 async function cleanup(): Promise<void> {
   if (pool === undefined) return;
+  await pool.query("DELETE FROM aop.leases WHERE organization_id = $1", [orgId]);
+  await pool.query("DELETE FROM aop.task_runs WHERE organization_id = $1", [orgId]);
   await pool.query("DELETE FROM aop.organizations WHERE id = $1", [orgId]);
   await pool.query("DELETE FROM aop.agents WHERE id = $1", [agentId]);
 }
