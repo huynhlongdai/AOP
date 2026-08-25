@@ -1,5 +1,9 @@
 BEGIN;
 
+ALTER TABLE aop.context_manifests
+  ADD COLUMN schema_version smallint NOT NULL DEFAULT 1 CHECK (schema_version = 1),
+  ADD COLUMN protocol_version varchar(32) NOT NULL DEFAULT '0.1.0' CHECK (protocol_version = '0.1.0');
+
 -- Slice 3 v0.1 freezes one exact Context Manifest per TaskRun. If authoritative
 -- context changes after a Run is prepared, recovery/retry must create a new Run
 -- rather than silently changing the prompt within the existing execution.
