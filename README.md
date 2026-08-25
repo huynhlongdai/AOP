@@ -2,7 +2,7 @@
 
 **Status: Planning complete — Ready for Slice 0 implementation**
 
-**UX/UI status: clickable prototype v0.2 under review**
+**UX/UI status: clickable prototype v0.3 — scale stress review complete, UX freeze pending**
 
 AOP is an experimental protocol and runtime architecture for organizing autonomous AI workers into persistent teams, companies, and organizations.
 
@@ -50,10 +50,11 @@ AOP treats an AI organization as a distributed system.
 8. `docs/meetings/008-ux-ui-alignment.md`
 9. `docs/meetings/009-frontend-prototype-kickoff.md`
 10. `docs/meetings/010-truth-automation-attention-ux.md`
+11. `docs/meetings/011-ux-stress-scale-navigation.md`
 
 Meeting #007 formally closed speculative architecture planning. Later meetings refine product/UX or respond to implementation evidence rather than reopening the Kernel without evidence.
 
-Meeting #008 approved the UX/UI information architecture. Meeting #009 began the zero-build clickable prototype. Meeting #010 completed the Truth/Automation/Attention surfaces: artifacts, decisions, approvals, schedule/cron and event audit UX.
+Meeting #008 approved the UX/UI information architecture. Meeting #009 began the zero-build clickable prototype. Meeting #010 completed the Truth/Automation/Attention surfaces. Meeting #011 stress-tested navigation and operating semantics at 12 / 120 / 1,200-agent scale and added executive compression, hierarchical context, command-palette navigation and ranked Attention Items.
 
 ## Current PoC target
 
@@ -82,9 +83,18 @@ The UI is organized around four layers:
 
 > **State over conversation. Evidence over self-report. Exceptions over noise.**
 
+At organizational scale, the UX adds:
+
+- hierarchical context narrowing instead of menu explosion
+- deterministic/ranked Human Attention
+- Search + Command Palette for cross-object navigation
+- saved views / aggregation / density controls for high-volume lists
+- progressive disclosure from executive summary -> operational evidence -> diagnostic detail
+- explicit drill-up paths from deep detail pages
+
 ## Prototype status
 
-The `prototype/` directory now contains a zero-build clickable prototype covering:
+The `prototype/` directory contains a zero-build clickable prototype covering:
 
 - Executive Dashboard
 - Project Workspace
@@ -96,6 +106,10 @@ The `prototype/` directory now contains a zero-build clickable prototype coverin
 - Schedule/Cron + Schedule Detail
 - Event Explorer + Event Detail
 - Knowledge/Memory boundary overview
+- Command Palette
+- ranked Human Attention drawer
+- hierarchical context switcher
+- 12 / 120 / 1,200-agent scale fixtures
 
 The prototype intentionally uses mock domain data while preserving legitimate AOP semantics. It is an interaction validation layer, not a second source of truth.
 
@@ -117,12 +131,14 @@ See `docs/implementation/MASTER_IMPLEMENTATION_PLAN.md` for the complete depende
 
 See `docs/implementation/UI_IMPLEMENTATION_PLAN.md` for the approved frontend route model, screen backlog, implementation order, P0 gate, and UX engineering constraints.
 
+The next UX gate is Meeting #012: UX Freeze & React Transfer Review.
+
 ## PoC non-goals
 
 - public Marketplace UI
 - token economy
 - reputation economy
 - large-scale microservices
-- hundreds of agents
+- hundreds of agents in the first functional PoC
 
 The first objective is to prove that the Organization Kernel improves verified autonomous work compared with a single-agent baseline and a simple supervisor multi-agent baseline.
