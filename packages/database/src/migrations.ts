@@ -6,6 +6,10 @@ export const DATABASE_MIGRATIONS = [
   "0005_event_versioning",
   "0006_outbox_delivery_hardening",
   "0007_scheduler_capacity_v0",
+  "0008_artifact_task_fk_hardening",
+  "0009_artifact_lineage_delete_hardening",
+  "0010_task_artifact_input_invalidation",
+  "0011_task_review_completion_guard",
 ] as const;
 
 export type DatabaseMigration = (typeof DATABASE_MIGRATIONS)[number];
