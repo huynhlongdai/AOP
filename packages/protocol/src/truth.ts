@@ -59,12 +59,20 @@ export const ArtifactVersionSchema = z
   })
   .strict()
   .superRefine((version, ctx) => {
-    const isApproved = version.status === "approved";
-    if (isApproved && (version.approvedBy === undefined || version.approvedAt === undefined)) {
-      ctx.addIssue({ code: "custom", path: ["approvedBy"], message: "approved artifact versions require approver and approvedAt" });
+    const preservesApprovalHistory = version.status === "approved" || version.status === "superseded";
+    if (preservesApprovalHistory && (version.approvedBy === undefined || version.approvedAt === undefined)) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["approvedBy"],
+        message: "approved and superseded artifact versions require historical approver and approvedAt",
+      });
     }
-    if (!isApproved && (version.approvedBy !== undefined || version.approvedAt !== undefined)) {
-      ctx.addIssue({ code: "custom", path: ["approvedBy"], message: "approval metadata is only valid for approved versions" });
+    if (!preservesApprovalHistory && (version.approvedBy !== undefined || version.approvedAt !== undefined)) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["approvedBy"],
+        message: "approval metadata is only valid for approved or superseded versions",
+      });
     }
   });
 
