@@ -6,6 +6,8 @@ import {
   ArtifactIdSchema,
   OrganizationIdSchema,
   TaskIdSchema,
+  type OrganizationId,
+  type OrganizationSnapshot,
 } from "@aop/protocol";
 
 import { parseEventSequenceCursor, streamOrganizationEvents } from "./event-stream.js";
@@ -45,13 +47,23 @@ function notFound(reply: FastifyReply, resource: string) {
   return reply.code(404).send({ error: "not_found", message: `${resource} was not found` });
 }
 
-function parseOrganizationId(value: string, reply: FastifyReply) {
+function parseOrganizationId(value: string, reply: FastifyReply): OrganizationId | undefined {
   const parsed = OrganizationIdSchema.safeParse(value);
   if (!parsed.success) {
     badRequest(reply, "organizationId is invalid");
     return undefined;
   }
   return parsed.data;
+}
+
+async function requireOrganization(
+  store: OrganizationQueryStore,
+  organizationId: OrganizationId,
+  reply: FastifyReply,
+): Promise<OrganizationSnapshot | undefined> {
+  const snapshot = await store.getOrganizationSnapshot(organizationId);
+  if (snapshot === undefined) notFound(reply, "organization");
+  return snapshot;
 }
 
 export function buildApiServer(options: ApiServerOptions): FastifyInstance {
@@ -62,21 +74,21 @@ export function buildApiServer(options: ApiServerOptions): FastifyInstance {
   app.get<{ Params: OrganizationParams }>("/organizations/:organizationId/snapshot", async (request, reply) => {
     const organizationId = parseOrganizationId(request.params.organizationId, reply);
     if (organizationId === undefined) return;
-    const snapshot = await options.queryStore.getOrganizationSnapshot(organizationId);
-    if (snapshot === undefined) return notFound(reply, "organization");
-    return snapshot;
+    return requireOrganization(options.queryStore, organizationId, reply);
   });
 
   app.get<{ Params: OrganizationParams }>("/organizations/:organizationId/goals", async (request, reply) => {
     const organizationId = parseOrganizationId(request.params.organizationId, reply);
     if (organizationId === undefined) return;
-    return options.queryStore.listGoals(organizationId);
+    const snapshot = await requireOrganization(options.queryStore, organizationId, reply);
+    return snapshot?.goals;
   });
 
   app.get<{ Params: OrganizationParams }>("/organizations/:organizationId/tasks", async (request, reply) => {
     const organizationId = parseOrganizationId(request.params.organizationId, reply);
     if (organizationId === undefined) return;
-    return options.queryStore.listTasks(organizationId);
+    const snapshot = await requireOrganization(options.queryStore, organizationId, reply);
+    return snapshot?.tasks;
   });
 
   app.get<{ Params: TaskParams }>("/organizations/:organizationId/tasks/:taskId", async (request, reply) => {
@@ -105,6 +117,7 @@ export function buildApiServer(options: ApiServerOptions): FastifyInstance {
   app.get<{ Params: OrganizationParams }>("/organizations/:organizationId/decisions", async (request, reply) => {
     const organizationId = parseOrganizationId(request.params.organizationId, reply);
     if (organizationId === undefined) return;
+    if ((await requireOrganization(options.queryStore, organizationId, reply)) === undefined) return;
     return options.queryStore.listDecisions(organizationId);
   });
 
@@ -113,9 +126,13 @@ export function buildApiServer(options: ApiServerOptions): FastifyInstance {
     async (request, reply) => {
       const organizationId = parseOrganizationId(request.params.organizationId, reply);
       if (organizationId === undefined) return;
+      const snapshot = await requireOrganization(options.queryStore, organizationId, reply);
+      if (snapshot === undefined) return;
+
       if (request.query.status === undefined) return options.queryStore.listApprovals(organizationId);
       const status = ApprovalStatusSchema.safeParse(request.query.status);
       if (!status.success) return badRequest(reply, "approval status is invalid");
+      if (status.data === "pending") return snapshot.pendingApprovals;
       return options.queryStore.listApprovals(organizationId, status.data);
     },
   );
@@ -125,6 +142,7 @@ export function buildApiServer(options: ApiServerOptions): FastifyInstance {
     async (request, reply) => {
       const organizationId = parseOrganizationId(request.params.organizationId, reply);
       if (organizationId === undefined) return;
+      if ((await requireOrganization(options.queryStore, organizationId, reply)) === undefined) return;
       try {
         const after = parseEventSequenceCursor(request.query.after);
         const limit = request.query.limit === undefined ? 100 : parseEventSequenceCursor(request.query.limit);
@@ -141,6 +159,7 @@ export function buildApiServer(options: ApiServerOptions): FastifyInstance {
     async (request, reply) => {
       const organizationId = parseOrganizationId(request.params.organizationId, reply);
       if (organizationId === undefined) return;
+      if ((await requireOrganization(options.queryStore, organizationId, reply)) === undefined) return;
 
       const lastEventIdHeader = request.headers["last-event-id"];
       const lastEventId = Array.isArray(lastEventIdHeader) ? lastEventIdHeader[0] : lastEventIdHeader;
@@ -165,10 +184,9 @@ export function buildApiServer(options: ApiServerOptions): FastifyInstance {
             : { pollIntervalMs: options.eventPollIntervalMs }),
         });
       } catch (error) {
+        request.log.error({ err: error, organizationId, afterSequence }, "Organization event stream failed");
         if (!reply.raw.destroyed) {
-          reply.raw.write(
-            `event: stream.error\ndata: ${JSON.stringify({ message: error instanceof Error ? error.message : "stream failed" })}\n\n`,
-          );
+          reply.raw.write(`event: stream.error\ndata: ${JSON.stringify({ message: "stream failed" })}\n\n`);
           reply.raw.end();
         }
       }
