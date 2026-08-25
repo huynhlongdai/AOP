@@ -114,33 +114,33 @@ describe("Context Manifest compiler", () => {
       compiledAt,
     });
 
-    const candidates: ContextCandidate[] = [
-      ...baseCandidates(),
-      {
-        key: "memory:low",
-        kind: "memory",
-        trust: "derived",
-        mandatory: false,
-        relevanceWeight: 0.2,
-        content: "x".repeat(80),
-      },
-      {
-        key: "memory:high",
-        kind: "memory",
-        trust: "derived",
-        mandatory: false,
-        relevanceWeight: 0.9,
-        content: "y".repeat(80),
-      },
-    ];
+    const lowCandidate: ContextCandidate = {
+      key: "memory:low",
+      kind: "memory",
+      trust: "derived",
+      mandatory: false,
+      relevanceWeight: 0.2,
+      content: "x".repeat(80),
+    };
+    const highCandidate: ContextCandidate = {
+      key: "memory:high",
+      kind: "memory",
+      trust: "derived",
+      mandatory: false,
+      relevanceWeight: 0.9,
+      content: "y".repeat(80),
+    };
+    const candidates: ContextCandidate[] = [...baseCandidates(), lowCandidate, highCandidate];
 
-    const highFragment = compileContextManifest({
+    const highOnly = compileContextManifest({
       ...ids,
       taskRevision: 4,
-      candidates: [...baseCandidates(), candidates[candidates.length - 1]!],
+      candidates: [...baseCandidates(), highCandidate],
       maxTokens: 20_000,
       compiledAt,
-    }).fragments.find((fragment) => fragment.key === "memory:high")!;
+    });
+    const highFragment = highOnly.fragments.find((fragment) => fragment.key === "memory:high");
+    if (highFragment === undefined) throw new Error("Expected high-priority memory fragment");
 
     const budget = baseline.totalTokenEstimate + highFragment.tokenEstimate;
     const manifest = compileContextManifest({ ...ids, taskRevision: 4, candidates, maxTokens: budget, compiledAt });
