@@ -8,6 +8,7 @@ export default defineConfig({
   resolve: {
     alias: {
       "@aop/command-bus": source("./packages/command-bus/src/index.ts"),
+      "@aop/context-engine": source("./packages/context-engine/src/index.ts"),
       "@aop/database": source("./packages/database/src/index.ts"),
       "@aop/domain": source("./packages/domain/src/index.ts"),
       "@aop/event-bus": source("./packages/event-bus/src/index.ts"),
