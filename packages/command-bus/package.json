@@ -16,5 +16,8 @@
     "@aop/domain": "workspace:*",
     "@aop/policy-engine": "workspace:*",
     "@aop/protocol": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/node": "^24.13.3"
   }
 }
