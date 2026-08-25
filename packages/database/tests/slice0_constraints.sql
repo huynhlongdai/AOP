@@ -144,7 +144,7 @@ BEGIN
       'run_00000000000000000000000001',
       'agt_00000000000000000000000001',
       'active',
-      2,
+      1,
       now(),
       now() + interval '10 minutes',
       60,
@@ -153,6 +153,31 @@ BEGIN
     RAISE EXCEPTION 'second active lease was incorrectly accepted';
   EXCEPTION
     WHEN unique_violation THEN NULL;
+  END;
+END $$;
+
+DO $$
+BEGIN
+  BEGIN
+    INSERT INTO aop.leases (
+      id, organization_id, task_id, run_id, agent_id, status, attempt,
+      acquired_at, expires_at, heartbeat_interval_seconds, revision
+    ) VALUES (
+      'lea_00000000000000000000000003',
+      'org_00000000000000000000000001',
+      'tsk_00000000000000000000000001',
+      'run_00000000000000000000000001',
+      'agt_00000000000000000000000001',
+      'released',
+      2,
+      now(),
+      now() + interval '10 minutes',
+      60,
+      0
+    );
+    RAISE EXCEPTION 'lease with mismatched TaskRun attempt was incorrectly accepted';
+  EXCEPTION
+    WHEN foreign_key_violation THEN NULL;
   END;
 END $$;
 
