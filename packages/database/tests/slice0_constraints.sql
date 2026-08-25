@@ -4,8 +4,8 @@ BEGIN;
 
 DO $$
 BEGIN
-  IF (SELECT count(*) FROM aop.schema_migrations) <> 5 THEN
-    RAISE EXCEPTION 'expected 5 applied migrations';
+  IF (SELECT count(*) FROM aop.schema_migrations) <> 6 THEN
+    RAISE EXCEPTION 'expected 6 applied migrations';
   END IF;
 END $$;
 
@@ -172,6 +172,17 @@ BEGIN
     );
     RAISE EXCEPTION 'duplicate organization event sequence was incorrectly accepted';
   EXCEPTION WHEN unique_violation THEN NULL;
+  END;
+
+  BEGIN
+    INSERT INTO aop.outbox_events (
+      event_id, organization_id, status, locked_at, locked_by
+    ) VALUES (
+      'evt_00000000000000000000000001', 'org_00000000000000000000000001',
+      'pending', now(), 'invalid-worker'
+    );
+    RAISE EXCEPTION 'pending outbox row with a processing lock was incorrectly accepted';
+  EXCEPTION WHEN check_violation THEN NULL;
   END;
 END $$;
 
