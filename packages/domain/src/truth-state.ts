@@ -42,6 +42,61 @@ export interface ArtifactApprovalResult extends ArtifactLifecycleResult {
   readonly supersededVersion?: ArtifactVersion;
 }
 
+export type ArtifactCreateInput = Omit<Artifact, "revision" | "currentApprovedVersionId">;
+
+export function createArtifactWithInitialDraft(
+  input: ArtifactCreateInput,
+  version: ArtifactVersion,
+): ArtifactLifecycleResult {
+  const artifact = ArtifactSchema.parse({ ...input, revision: 0 });
+  assertArtifactVersionBelongsToArtifact(artifact, version);
+  invariant(version.version === 1, "Initial Artifact version must be version 1", {
+    artifactId: artifact.id,
+    version: version.version,
+  });
+  invariant(version.status === "draft", "Initial Artifact version must be draft", {
+    artifactId: artifact.id,
+    versionId: version.id,
+    status: version.status,
+  });
+  invariant(version.supersedesVersionId === undefined, "Initial Artifact version cannot supersede another version", {
+    artifactId: artifact.id,
+    versionId: version.id,
+  });
+
+  return { artifact, version: ArtifactVersionSchema.parse(version) };
+}
+
+export function addArtifactDraftVersion(
+  artifact: Artifact,
+  version: ArtifactVersion,
+  previousVersion: Pick<ArtifactVersion, "id" | "version">,
+  expectedArtifactRevision: number,
+  updatedAt: string,
+): ArtifactLifecycleResult {
+  assertArtifactVersionBelongsToArtifact(artifact, version);
+  invariant(version.status === "draft", "New Artifact revision must start as draft", {
+    artifactId: artifact.id,
+    versionId: version.id,
+    status: version.status,
+  });
+  invariant(version.version === previousVersion.version + 1, "Artifact versions must be contiguous", {
+    artifactId: artifact.id,
+    previousVersion: previousVersion.version,
+    nextVersion: version.version,
+  });
+  invariant(version.supersedesVersionId === previousVersion.id, "Artifact revision must supersede the latest version", {
+    artifactId: artifact.id,
+    expectedSupersedesVersionId: previousVersion.id,
+    actualSupersedesVersionId: version.supersedesVersionId,
+  });
+
+  return {
+    artifact: bumpArtifact(artifact, expectedArtifactRevision, updatedAt),
+    version: ArtifactVersionSchema.parse(version),
+  };
+}
+
 export function submitArtifactVersionForReview(
   artifact: Artifact,
   version: ArtifactVersion,
