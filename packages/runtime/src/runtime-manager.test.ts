@@ -82,8 +82,11 @@ class FakeKernel implements KernelRuntimePort {
   heartbeats: unknown[] = [];
   finished: Array<Record<string, unknown>> = [];
   submissions: KernelCommandSubmission[] = [];
+  preparedError: Error | undefined;
+  submissionErrorAtIndex: number | undefined;
 
   async recordPrepared(input: Parameters<KernelRuntimePort["recordPrepared"]>[0]): Promise<void> {
+    if (this.preparedError !== undefined) throw this.preparedError;
     this.prepared.push(input);
   }
 
@@ -101,6 +104,7 @@ class FakeKernel implements KernelRuntimePort {
 
   async submitAgentCommand(input: KernelCommandSubmission): Promise<CommandResult> {
     this.submissions.push(input);
+    if (input.proposalIndex === this.submissionErrorAtIndex) throw new Error("gateway unavailable");
     return { ok: true, commandId, resultingRevision: 4, emittedEventIds: [] };
   }
 }
@@ -115,6 +119,7 @@ class FakeAdapter implements RuntimeAdapter {
     traceRefs: [{ provider: "test", traceId: "prepare-trace" }],
   };
   prepareInputs: unknown[] = [];
+  startCalls = 0;
   cancelled: Array<{ runtimeId: string; reason?: string }> = [];
   result: RuntimeExecutionResult = {
     status: "succeeded",
@@ -130,6 +135,7 @@ class FakeAdapter implements RuntimeAdapter {
   }
 
   async start(): Promise<RuntimeExecutionResult> {
+    this.startCalls += 1;
     if (this.startError !== undefined) throw this.startError;
     return this.result;
   }
@@ -158,7 +164,7 @@ const executeInput = {
 } as const;
 
 describe("Runtime Manager intelligence boundary", () => {
-  it("passes the exact Manifest to the adapter and binds command identity before Kernel submission", async () => {
+  it("passes the exact Manifest to the adapter and binds trusted command identity before Kernel submission", async () => {
     const context = new FakeContext();
     const kernel = new FakeKernel();
     const adapter = new FakeAdapter();
@@ -182,6 +188,7 @@ describe("Runtime Manager intelligence boundary", () => {
       organizationId: orgId,
       runId,
       agentId,
+      proposalIndex: 0,
       proposal: { type: "task.create", payload: { title: "Backend" } },
     });
     expect(report.commandOutcomes).toHaveLength(2);
@@ -234,6 +241,48 @@ describe("Runtime Manager intelligence boundary", () => {
     expect(report.status).toBe("failed");
     expect(report.failureReason).toMatch(/maxOutputTokens/);
     expect(kernel.submissions).toHaveLength(0);
+  });
+
+  it("fails the Run and stops forwarding later proposals when Kernel submission throws", async () => {
+    const context = new FakeContext();
+    const kernel = new FakeKernel();
+    const adapter = new FakeAdapter();
+    kernel.submissionErrorAtIndex = 0;
+    adapter.result = {
+      status: "succeeded",
+      commandProposals: [
+        { type: "task.create", payload: { title: "First" } },
+        { type: "task.create", payload: { title: "Second" } },
+      ],
+      usage: { inputTokens: 20, outputTokens: 10, toolCalls: 0 },
+      traceRefs: [],
+    };
+
+    const report = await new RuntimeManager(context, kernel, adapter, () => now).execute(executeInput);
+
+    expect(kernel.submissions).toHaveLength(1);
+    expect(report.status).toBe("failed");
+    expect(report.failureReason).toMatch(/gateway unavailable/);
+    expect(report.commandOutcomes).toHaveLength(1);
+    expect(report.commandOutcomes[0]).toMatchObject({
+      forwarded: true,
+      denialReason: "kernel_submission_failed:gateway unavailable",
+    });
+    expect(kernel.finished[0]).toMatchObject({ status: "failed" });
+  });
+
+  it("cancels a prepared provider runtime when trusted lifecycle persistence fails", async () => {
+    const context = new FakeContext();
+    const kernel = new FakeKernel();
+    const adapter = new FakeAdapter();
+    kernel.preparedError = new Error("control plane unavailable");
+
+    await expect(new RuntimeManager(context, kernel, adapter).execute(executeInput)).rejects.toThrow(
+      "control plane unavailable",
+    );
+
+    expect(adapter.startCalls).toBe(0);
+    expect(adapter.cancelled).toEqual([{ runtimeId: "runtime-1", reason: "kernel_lifecycle_record_failed" }]);
   });
 
   it("routes heartbeat and cancellation through trusted control-plane ports", async () => {
