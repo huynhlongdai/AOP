@@ -67,8 +67,7 @@ async function rows(client: PoolClient, text: string, values: readonly unknown[]
 }
 
 async function one(client: PoolClient, text: string, values: readonly unknown[] = []): Promise<QueryRow | undefined> {
-  const result = await rows(client, text, values);
-  return result[0];
+  return (await rows(client, text, values))[0];
 }
 
 function taskInputsByTask(rowsToMap: readonly QueryRow[]): ReadonlyMap<string, readonly TaskArtifactInput[]> {
@@ -114,20 +113,16 @@ async function loadTasks(
 ): Promise<readonly Task[]> {
   const predicate = taskId === undefined ? "" : " AND id = $2";
   const values: readonly unknown[] = taskId === undefined ? [organizationId] : [organizationId, taskId];
-  const [taskRows, inputs] = await Promise.all([
-    rows(
-      client,
-      `SELECT *
-         FROM aop.tasks
-        WHERE organization_id = $1${predicate}
-        ORDER BY created_at, id`,
-      values,
-    ),
-    loadTaskInputs(client, organizationId, taskId),
-  ]);
-  return TaskListQuerySchema.parse(
-    taskRows.map((row) => mapTask(row, inputs.get(String(row.id)) ?? [])),
+  const taskRows = await rows(
+    client,
+    `SELECT *
+       FROM aop.tasks
+      WHERE organization_id = $1${predicate}
+      ORDER BY created_at, id`,
+    values,
   );
+  const inputs = await loadTaskInputs(client, organizationId, taskId);
+  return TaskListQuerySchema.parse(taskRows.map((row) => mapTask(row, inputs.get(String(row.id)) ?? [])));
 }
 
 async function loadApprovals(
@@ -167,28 +162,24 @@ function resourcesByDecision(rowsToMap: readonly QueryRow[]): ReadonlyMap<string
 }
 
 async function loadDecisions(client: PoolClient, organizationId: OrganizationId): Promise<readonly Decision[]> {
-  const [decisionRows, impactRows] = await Promise.all([
-    rows(
-      client,
-      `SELECT *
-         FROM aop.decisions
-        WHERE organization_id = $1
-        ORDER BY updated_at DESC, id DESC`,
-      [organizationId],
-    ),
-    rows(
-      client,
-      `SELECT decision_id, resource_type, resource_id
-         FROM aop.decision_impacts
-        WHERE organization_id = $1
-        ORDER BY decision_id, created_at, resource_type, resource_id`,
-      [organizationId],
-    ),
-  ]);
-  const resources = resourcesByDecision(impactRows);
-  return DecisionListQuerySchema.parse(
-    decisionRows.map((row) => mapDecision(row, resources.get(String(row.id)) ?? [])),
+  const decisionRows = await rows(
+    client,
+    `SELECT *
+       FROM aop.decisions
+      WHERE organization_id = $1
+      ORDER BY updated_at DESC, id DESC`,
+    [organizationId],
   );
+  const impactRows = await rows(
+    client,
+    `SELECT decision_id, resource_type, resource_id
+       FROM aop.decision_impacts
+      WHERE organization_id = $1
+      ORDER BY decision_id, created_at, resource_type, resource_id`,
+    [organizationId],
+  );
+  const resources = resourcesByDecision(impactRows);
+  return DecisionListQuerySchema.parse(decisionRows.map((row) => mapDecision(row, resources.get(String(row.id)) ?? [])));
 }
 
 function derivedParentsByVersion(rowsToMap: readonly QueryRow[]): ReadonlyMap<string, readonly ArtifactVersionId[]> {
@@ -229,56 +220,53 @@ export class PostgresQueryStore implements OrganizationQueryStore {
       const organizationRow = await one(client, "SELECT * FROM aop.organizations WHERE id = $1", [organizationId]);
       if (organizationRow === undefined) return undefined;
 
-      const [agentRows, membershipRows, roleRows, roleAssignmentRows, goalRows, tasks, pendingApprovals, eventRow, timeRow] =
-        await Promise.all([
-          rows(
-            client,
-            `SELECT a.*
-               FROM aop.agents a
-               JOIN aop.organization_memberships m ON m.agent_id = a.id
-              WHERE m.organization_id = $1
-              ORDER BY a.created_at, a.id`,
-            [organizationId],
-          ),
-          rows(
-            client,
-            `SELECT * FROM aop.organization_memberships
-              WHERE organization_id = $1
-              ORDER BY joined_at, id`,
-            [organizationId],
-          ),
-          rows(
-            client,
-            `SELECT * FROM aop.roles
-              WHERE organization_id = $1
-              ORDER BY created_at, id`,
-            [organizationId],
-          ),
-          rows(
-            client,
-            `SELECT * FROM aop.role_assignments
-              WHERE organization_id = $1
-              ORDER BY active_from, role_id, agent_id`,
-            [organizationId],
-          ),
-          rows(
-            client,
-            `SELECT * FROM aop.goals
-              WHERE organization_id = $1
-              ORDER BY created_at, id`,
-            [organizationId],
-          ),
-          loadTasks(client, organizationId),
-          loadApprovals(client, organizationId, "pending"),
-          one(
-            client,
-            `SELECT COALESCE(MAX(organization_sequence), 0) AS latest_event_sequence
-               FROM aop.events
-              WHERE organization_id = $1`,
-            [organizationId],
-          ),
-          one(client, "SELECT transaction_timestamp() AS generated_at"),
-        ]);
+      const agentRows = await rows(
+        client,
+        `SELECT a.*
+           FROM aop.agents a
+           JOIN aop.organization_memberships m ON m.agent_id = a.id
+          WHERE m.organization_id = $1
+          ORDER BY a.created_at, a.id`,
+        [organizationId],
+      );
+      const membershipRows = await rows(
+        client,
+        `SELECT * FROM aop.organization_memberships
+          WHERE organization_id = $1
+          ORDER BY joined_at, id`,
+        [organizationId],
+      );
+      const roleRows = await rows(
+        client,
+        `SELECT * FROM aop.roles
+          WHERE organization_id = $1
+          ORDER BY created_at, id`,
+        [organizationId],
+      );
+      const roleAssignmentRows = await rows(
+        client,
+        `SELECT * FROM aop.role_assignments
+          WHERE organization_id = $1
+          ORDER BY active_from, role_id, agent_id`,
+        [organizationId],
+      );
+      const goalRows = await rows(
+        client,
+        `SELECT * FROM aop.goals
+          WHERE organization_id = $1
+          ORDER BY created_at, id`,
+        [organizationId],
+      );
+      const tasks = await loadTasks(client, organizationId);
+      const pendingApprovals = await loadApprovals(client, organizationId, "pending");
+      const eventRow = await one(
+        client,
+        `SELECT COALESCE(MAX(organization_sequence), 0) AS latest_event_sequence
+           FROM aop.events
+          WHERE organization_id = $1`,
+        [organizationId],
+      );
+      const timeRow = await one(client, "SELECT transaction_timestamp() AS generated_at");
 
       if (eventRow === undefined || timeRow === undefined) throw new Error("Snapshot metadata query returned no row");
 
@@ -306,44 +294,42 @@ export class PostgresQueryStore implements OrganizationQueryStore {
       const task = tasks[0];
       if (task === undefined) return undefined;
 
-      const [dependencyRows, runRows, leaseRows, reviewRows, outputRows] = await Promise.all([
-        rows(
-          client,
-          `SELECT * FROM aop.task_dependencies
-            WHERE organization_id = $1 AND task_id = $2
-            ORDER BY depends_on_task_id`,
-          [organizationId, taskId],
-        ),
-        rows(
-          client,
-          `SELECT * FROM aop.task_runs
-            WHERE organization_id = $1 AND task_id = $2
-            ORDER BY attempt DESC, id DESC`,
-          [organizationId, taskId],
-        ),
-        rows(
-          client,
-          `SELECT * FROM aop.leases
-            WHERE organization_id = $1 AND task_id = $2
-            ORDER BY acquired_at DESC, id DESC`,
-          [organizationId, taskId],
-        ),
-        rows(
-          client,
-          `SELECT * FROM aop.reviews
-            WHERE organization_id = $1 AND subject_type = 'task' AND subject_id = $2
-            ORDER BY created_at DESC, id DESC`,
-          [organizationId, taskId],
-        ),
-        rows(
-          client,
-          `SELECT artifact_version_id, deliverable_type
-             FROM aop.task_artifact_outputs
-            WHERE organization_id = $1 AND task_id = $2
-            ORDER BY created_at, artifact_version_id`,
-          [organizationId, taskId],
-        ),
-      ]);
+      const dependencyRows = await rows(
+        client,
+        `SELECT * FROM aop.task_dependencies
+          WHERE organization_id = $1 AND task_id = $2
+          ORDER BY depends_on_task_id`,
+        [organizationId, taskId],
+      );
+      const runRows = await rows(
+        client,
+        `SELECT * FROM aop.task_runs
+          WHERE organization_id = $1 AND task_id = $2
+          ORDER BY attempt DESC, id DESC`,
+        [organizationId, taskId],
+      );
+      const leaseRows = await rows(
+        client,
+        `SELECT * FROM aop.leases
+          WHERE organization_id = $1 AND task_id = $2
+          ORDER BY acquired_at DESC, id DESC`,
+        [organizationId, taskId],
+      );
+      const reviewRows = await rows(
+        client,
+        `SELECT * FROM aop.reviews
+          WHERE organization_id = $1 AND subject_type = 'task' AND subject_id = $2
+          ORDER BY created_at DESC, id DESC`,
+        [organizationId, taskId],
+      );
+      const outputRows = await rows(
+        client,
+        `SELECT artifact_version_id, deliverable_type
+           FROM aop.task_artifact_outputs
+          WHERE organization_id = $1 AND task_id = $2
+          ORDER BY created_at, artifact_version_id`,
+        [organizationId, taskId],
+      );
 
       return TaskDetailQuerySchema.parse({
         task,
@@ -373,35 +359,31 @@ export class PostgresQueryStore implements OrganizationQueryStore {
       );
       if (artifactRow === undefined) return undefined;
 
-      const [versionRows, lineageRows] = await Promise.all([
-        rows(
-          client,
-          `SELECT * FROM aop.artifact_versions
-            WHERE organization_id = $1 AND artifact_id = $2
-            ORDER BY version, id`,
-          [organizationId, artifactId],
-        ),
-        rows(
-          client,
-          `SELECT l.child_version_id, l.parent_version_id
-             FROM aop.artifact_lineage l
-             JOIN aop.artifact_versions v
-               ON v.organization_id = l.organization_id
-              AND v.id = l.child_version_id
-            WHERE l.organization_id = $1
-              AND v.artifact_id = $2
-              AND l.relationship = 'derived_from'
-            ORDER BY l.child_version_id, l.created_at, l.parent_version_id`,
-          [organizationId, artifactId],
-        ),
-      ]);
+      const versionRows = await rows(
+        client,
+        `SELECT * FROM aop.artifact_versions
+          WHERE organization_id = $1 AND artifact_id = $2
+          ORDER BY version, id`,
+        [organizationId, artifactId],
+      );
+      const lineageRows = await rows(
+        client,
+        `SELECT l.child_version_id, l.parent_version_id
+           FROM aop.artifact_lineage l
+           JOIN aop.artifact_versions v
+             ON v.organization_id = l.organization_id
+            AND v.id = l.child_version_id
+          WHERE l.organization_id = $1
+            AND v.artifact_id = $2
+            AND l.relationship = 'derived_from'
+          ORDER BY l.child_version_id, l.created_at, l.parent_version_id`,
+        [organizationId, artifactId],
+      );
       const parents = derivedParentsByVersion(lineageRows);
 
       return ArtifactVersionsQuerySchema.parse({
         artifact: mapArtifact(artifactRow),
-        versions: versionRows.map((row) =>
-          mapArtifactVersion(row, parents.get(String(row.id)) ?? []),
-        ),
+        versions: versionRows.map((row) => mapArtifactVersion(row, parents.get(String(row.id)) ?? [])),
       });
     });
   }
