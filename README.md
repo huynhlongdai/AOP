@@ -2,7 +2,7 @@
 
 **Status: Planning complete — Ready for Slice 0 implementation**
 
-**UX/UI status: clickable prototype v0.3 — scale stress review complete, UX freeze pending**
+**UX/UI status: v0.1 FROZEN for PoC implementation — React transfer plan approved**
 
 AOP is an experimental protocol and runtime architecture for organizing autonomous AI workers into persistent teams, companies, and organizations.
 
@@ -36,7 +36,8 @@ AOP treats an AI organization as a distributed system.
 4. `docs/implementation/MASTER_IMPLEMENTATION_PLAN.md`
 5. `docs/design/UX_UI_SYSTEM_v0.1.md`
 6. `docs/implementation/UI_IMPLEMENTATION_PLAN.md`
-7. `prototype/README.md`
+7. `docs/implementation/REACT_TRANSFER_PLAN.md`
+8. `prototype/README.md`
 
 ## Meeting record
 
@@ -51,10 +52,11 @@ AOP treats an AI organization as a distributed system.
 9. `docs/meetings/009-frontend-prototype-kickoff.md`
 10. `docs/meetings/010-truth-automation-attention-ux.md`
 11. `docs/meetings/011-ux-stress-scale-navigation.md`
+12. `docs/meetings/012-ux-freeze-react-transfer.md`
 
 Meeting #007 formally closed speculative architecture planning. Later meetings refine product/UX or respond to implementation evidence rather than reopening the Kernel without evidence.
 
-Meeting #008 approved the UX/UI information architecture. Meeting #009 began the zero-build clickable prototype. Meeting #010 completed the Truth/Automation/Attention surfaces. Meeting #011 stress-tested navigation and operating semantics at 12 / 120 / 1,200-agent scale and added executive compression, hierarchical context, command-palette navigation and ranked Attention Items.
+Meetings #008–#012 established, prototyped, stress-tested and finally froze the UX/UI contract for the PoC. The zero-build prototype remains a reference artifact; production transfer is governed by `docs/implementation/REACT_TRANSFER_PLAN.md`.
 
 ## Current PoC target
 
@@ -111,7 +113,22 @@ The `prototype/` directory contains a zero-build clickable prototype covering:
 - hierarchical context switcher
 - 12 / 120 / 1,200-agent scale fixtures
 
-The prototype intentionally uses mock domain data while preserving legitimate AOP semantics. It is an interaction validation layer, not a second source of truth.
+The prototype intentionally uses mock domain data while preserving legitimate AOP semantics. It is an interaction validation layer, not a second source of truth. Feature expansion is frozen after Meeting #012 unless implementation/usability evidence requires a focused experiment.
+
+## UX implementation contract
+
+The production React client must preserve:
+
+- organization-scoped canonical routes
+- shared DetailShell / ContextRail grammar
+- Snapshot + ordered SSE + reconciliation realtime behavior
+- explicit stale/reconnecting states
+- no optimistic authoritative lifecycle mutations
+- command result / event reconciliation for protected actions
+- accessibility baseline
+- scale-aware pagination/virtualization/aggregation
+
+See `docs/implementation/REACT_TRANSFER_PLAN.md`.
 
 ## Execution slices
 
@@ -129,9 +146,7 @@ The prototype intentionally uses mock domain data while preserving legitimate AO
 
 See `docs/implementation/MASTER_IMPLEMENTATION_PLAN.md` for the complete dependency graph, epics, tickets, acceptance criteria, security requirements, chaos tests, and go/no-go gates.
 
-See `docs/implementation/UI_IMPLEMENTATION_PLAN.md` for the approved frontend route model, screen backlog, implementation order, P0 gate, and UX engineering constraints.
-
-The next UX gate is Meeting #012: UX Freeze & React Transfer Review.
+The next project phase is engineering execution, not further speculative UX expansion.
 
 ## PoC non-goals
 
