@@ -26,4 +26,14 @@ export const TaskClaimPayloadSchema = z
     }
   });
 
+export const LeaseHeartbeatPayloadSchema = z
+  .object({
+    extendSeconds: z.number().int().min(30).max(3_600),
+  })
+  .strict();
+
+export const LeaseExpirePayloadSchema = z.object({}).strict();
+
 export type TaskClaimPayload = z.infer<typeof TaskClaimPayloadSchema>;
+export type LeaseHeartbeatPayload = z.infer<typeof LeaseHeartbeatPayloadSchema>;
+export type LeaseExpirePayload = z.infer<typeof LeaseExpirePayloadSchema>;
