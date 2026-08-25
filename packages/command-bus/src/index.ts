@@ -1,4 +1,5 @@
 export * from "./contracts.js";
+export * from "./digest.js";
 export * from "./gateway.js";
 export * from "./task-claim.js";
 
