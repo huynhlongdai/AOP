@@ -2,7 +2,7 @@
 
 **Status: Planning complete — Ready for Slice 0 implementation**
 
-**UX/UI status: v0.1 approved for PoC implementation**
+**UX/UI status: clickable prototype v0.2 under review**
 
 AOP is an experimental protocol and runtime architecture for organizing autonomous AI workers into persistent teams, companies, and organizations.
 
@@ -36,6 +36,7 @@ AOP treats an AI organization as a distributed system.
 4. `docs/implementation/MASTER_IMPLEMENTATION_PLAN.md`
 5. `docs/design/UX_UI_SYSTEM_v0.1.md`
 6. `docs/implementation/UI_IMPLEMENTATION_PLAN.md`
+7. `prototype/README.md`
 
 ## Meeting record
 
@@ -47,10 +48,12 @@ AOP treats an AI organization as a distributed system.
 6. `docs/meetings/006-poc-product-deployment-evaluation.md`
 7. `docs/meetings/007-execution-readiness-review.md`
 8. `docs/meetings/008-ux-ui-alignment.md`
+9. `docs/meetings/009-frontend-prototype-kickoff.md`
+10. `docs/meetings/010-truth-automation-attention-ux.md`
 
-Meeting #007 formally closed speculative architecture planning. Future architecture meetings should be triggered by implementation evidence, failed gates, or ADR-worthy cross-cutting decisions.
+Meeting #007 formally closed speculative architecture planning. Later meetings refine product/UX or respond to implementation evidence rather than reopening the Kernel without evidence.
 
-Meeting #008 approved the UX/UI information architecture and interaction system for the PoC. The visual mockups are exploration references; `docs/design/UX_UI_SYSTEM_v0.1.md` is the frontend UX source of truth.
+Meeting #008 approved the UX/UI information architecture. Meeting #009 began the zero-build clickable prototype. Meeting #010 completed the Truth/Automation/Attention surfaces: artifacts, decisions, approvals, schedule/cron and event audit UX.
 
 ## Current PoC target
 
@@ -78,6 +81,23 @@ The UI is organized around four layers:
 - Truth/Automation/Audit — artifacts, decisions, schedules, events, memory
 
 > **State over conversation. Evidence over self-report. Exceptions over noise.**
+
+## Prototype status
+
+The `prototype/` directory now contains a zero-build clickable prototype covering:
+
+- Executive Dashboard
+- Project Workspace
+- Task Board + Task Detail
+- Agent Directory + Agent Detail
+- Artifact Registry + Artifact Detail
+- Decision Registry + Decision Detail
+- Human Approval Center + Approval Detail
+- Schedule/Cron + Schedule Detail
+- Event Explorer + Event Detail
+- Knowledge/Memory boundary overview
+
+The prototype intentionally uses mock domain data while preserving legitimate AOP semantics. It is an interaction validation layer, not a second source of truth.
 
 ## Execution slices
 
