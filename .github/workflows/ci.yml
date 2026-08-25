@@ -111,3 +111,6 @@ jobs:
 
       - name: Validate Scheduler candidates against PostgreSQL
         run: pnpm exec vitest run packages/scheduler/src/postgres-candidate-store.integration.test.ts
+
+      - name: Validate lease heartbeat and recovery against PostgreSQL
+        run: pnpm exec vitest run packages/database/src/lease-recovery.integration.test.ts
