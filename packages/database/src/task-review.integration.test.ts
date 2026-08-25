@@ -109,6 +109,10 @@ function resolveCommand(
 
 async function cleanup(): Promise<void> {
   if (pool === undefined) return;
+  // Runtime history intentionally RESTRICTs membership deletion, so test cleanup
+  // follows the same dependency order the Kernel must respect.
+  await pool.query("DELETE FROM aop.leases WHERE organization_id = $1", [orgId]);
+  await pool.query("DELETE FROM aop.task_runs WHERE organization_id = $1", [orgId]);
   await pool.query("DELETE FROM aop.organizations WHERE id = $1", [orgId]);
   await pool.query("DELETE FROM aop.agents WHERE id = ANY($1::text[])", [[ownerAgentId, reviewerAgentId]]);
 }
@@ -193,15 +197,16 @@ async function seed(): Promise<void> {
 
 async function addStaleRequiredInput(): Promise<void> {
   if (pool === undefined) throw new Error("DATABASE_URL missing");
-  await pool.query("BEGIN");
+  const client = await pool.connect();
   try {
-    await pool.query(
+    await client.query("BEGIN");
+    await client.query(
       `INSERT INTO aop.artifacts (
          id, organization_id, type, title, current_approved_version_id, revision, created_at, updated_at
        ) VALUES ($1,$2,'api.spec','Authentication contract',NULL,0,$3,$3)`,
       [artifactId, orgId, now],
     );
-    await pool.query(
+    await client.query(
       `INSERT INTO aop.artifact_versions (
          id, organization_id, artifact_id, version, status, created_by_type, created_by_id,
          content_uri, mime_type, checksum, size_bytes, approved_by_type, approved_by_id, approved_at, created_at
@@ -222,21 +227,23 @@ async function addStaleRequiredInput(): Promise<void> {
         checksum("2"),
       ],
     );
-    await pool.query(
+    await client.query(
       `UPDATE aop.artifacts
           SET current_approved_version_id = $3, revision = 1, updated_at = $4
         WHERE organization_id = $1 AND id = $2`,
       [orgId, artifactId, currentVersionId, now],
     );
-    await pool.query(
+    await client.query(
       `INSERT INTO aop.task_artifact_inputs (organization_id, task_id, artifact_version_id, required, created_at)
        VALUES ($1,$2,$3,true,$4)`,
       [orgId, taskId, staleVersionId, now],
     );
-    await pool.query("COMMIT");
+    await client.query("COMMIT");
   } catch (error) {
-    await pool.query("ROLLBACK");
+    await client.query("ROLLBACK");
     throw error;
+  } finally {
+    client.release();
   }
 }
 
@@ -255,8 +262,7 @@ describeDb("PostgreSQL Task QA review/rework lifecycle", () => {
     if (pool === undefined) return;
     const bus = gateway();
 
-    const submitted = await bus.execute(submitCommand());
-    expect(submitted.ok).toBe(true);
+    expect((await bus.execute(submitCommand())).ok).toBe(true);
     expect((await pool.query("SELECT state, revision FROM aop.tasks WHERE id = $1", [taskId])).rows[0]).toEqual({
       state: "review",
       revision: "1",
@@ -275,8 +281,7 @@ describeDb("PostgreSQL Task QA review/rework lifecycle", () => {
       revision: "0",
     });
 
-    const resolved = await bus.execute(resolveCommand("pass"));
-    expect(resolved.ok).toBe(true);
+    expect((await bus.execute(resolveCommand("pass"))).ok).toBe(true);
     expect(
       (await pool.query("SELECT state, revision, completed_at IS NOT NULL AS completed FROM aop.tasks WHERE id = $1", [taskId]))
         .rows[0],
