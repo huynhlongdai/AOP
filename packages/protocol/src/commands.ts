@@ -99,8 +99,29 @@ export const ArtifactRevisePayloadSchema = z
   .strict()
   .superRefine(validateArtifactProduction);
 
+export const ArtifactSubmitReviewPayloadSchema = z
+  .object({
+    versionId: ArtifactVersionIdSchema,
+  })
+  .strict();
+
+export const ArtifactApprovePayloadSchema = z
+  .object({
+    versionId: ArtifactVersionIdSchema,
+  })
+  .strict();
+
+export const ArtifactRejectPayloadSchema = z
+  .object({
+    versionId: ArtifactVersionIdSchema,
+  })
+  .strict();
+
 export type TaskClaimPayload = z.infer<typeof TaskClaimPayloadSchema>;
 export type LeaseHeartbeatPayload = z.infer<typeof LeaseHeartbeatPayloadSchema>;
 export type LeaseExpirePayload = z.infer<typeof LeaseExpirePayloadSchema>;
 export type ArtifactCreatePayload = z.infer<typeof ArtifactCreatePayloadSchema>;
 export type ArtifactRevisePayload = z.infer<typeof ArtifactRevisePayloadSchema>;
+export type ArtifactSubmitReviewPayload = z.infer<typeof ArtifactSubmitReviewPayloadSchema>;
+export type ArtifactApprovePayload = z.infer<typeof ArtifactApprovePayloadSchema>;
+export type ArtifactRejectPayload = z.infer<typeof ArtifactRejectPayloadSchema>;
