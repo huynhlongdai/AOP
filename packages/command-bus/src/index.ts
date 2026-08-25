@@ -1,5 +1,6 @@
 export * from "./artifact.js";
 export * from "./contracts.js";
+export * from "./decision.js";
 export * from "./digest.js";
 export * from "./gateway.js";
 export * from "./lease-recovery.js";
