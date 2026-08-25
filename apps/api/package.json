@@ -12,6 +12,9 @@
     }
   },
   "files": ["dist"],
+  "scripts": {
+    "start": "node dist/main.js"
+  },
   "dependencies": {
     "@aop/database": "workspace:*",
     "@aop/protocol": "workspace:*",
