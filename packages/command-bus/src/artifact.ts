@@ -49,7 +49,7 @@ export interface ArtifactWriteTransaction extends CommandTransaction {
     artifact: Artifact,
     version: ArtifactVersion,
     previousApprovedVersion?: ArtifactVersion,
-  ): Promise<readonly TaskId[]>;
+  ): Promise<void>;
 }
 
 function artifactTransaction(transaction: CommandTransaction): ArtifactWriteTransaction {
@@ -381,11 +381,7 @@ export class ArtifactApproveHandler implements CommandHandler {
       command.expectedRevision as number,
       previousApproved,
     );
-    const invalidatedTaskIds = await loaded.tx.persistArtifactLifecycle(
-      result.artifact,
-      result.version,
-      result.supersededVersion,
-    );
+    await loaded.tx.persistArtifactLifecycle(result.artifact, result.version, result.supersededVersion);
 
     const events: EventDraft[] = [
       {
@@ -408,7 +404,7 @@ export class ArtifactApproveHandler implements CommandHandler {
       },
     ];
 
-    if (result.supersededVersion !== undefined && invalidatedTaskIds.length > 0) {
+    if (result.supersededVersion !== undefined) {
       events.push({
         type: "artifact.consumers_invalidated",
         aggregate: { type: "artifact", id: result.artifact.id },
@@ -417,8 +413,8 @@ export class ArtifactApproveHandler implements CommandHandler {
         payload: {
           supersededVersionId: result.supersededVersion.id,
           replacementVersionId: result.version.id,
-          taskIds: [...invalidatedTaskIds],
           conservativePolicy: true,
+          impactSource: "derived_projection",
         },
       });
     }
