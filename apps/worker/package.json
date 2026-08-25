@@ -16,7 +16,10 @@
     "start": "node dist/main.js"
   },
   "dependencies": {
+    "@aop/command-bus": "workspace:*",
+    "@aop/database": "workspace:*",
     "@aop/event-bus": "workspace:*",
+    "@aop/scheduler": "workspace:*",
     "pg": "^8.23.0"
   },
   "devDependencies": {
