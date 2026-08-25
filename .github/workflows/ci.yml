@@ -46,7 +46,7 @@ jobs:
         run: pnpm build
 
   database:
-    name: Validate PostgreSQL schema and read model
+    name: Validate PostgreSQL coordination primitives
     runs-on: ubuntu-latest
     timeout-minutes: 15
     services:
@@ -102,3 +102,6 @@ jobs:
 
       - name: Validate Query Store against PostgreSQL
         run: pnpm exec vitest run packages/database/src/query-store.integration.test.ts
+
+      - name: Validate durable Outbox against PostgreSQL
+        run: pnpm exec vitest run packages/event-bus/src/outbox-store.integration.test.ts
