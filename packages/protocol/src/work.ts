@@ -79,8 +79,26 @@ export const TaskArtifactInputSchema = z
     artifactId: ArtifactIdSchema,
     versionId: ArtifactVersionIdSchema,
     required: z.boolean(),
+    invalidatedByVersionId: ArtifactVersionIdSchema.optional(),
+    invalidatedAt: TimestampSchema.optional(),
   })
-  .strict();
+  .strict()
+  .superRefine((input, ctx) => {
+    if ((input.invalidatedByVersionId === undefined) !== (input.invalidatedAt === undefined)) {
+      ctx.addIssue({
+        code: "custom",
+        path: [input.invalidatedByVersionId === undefined ? "invalidatedByVersionId" : "invalidatedAt"],
+        message: "invalidatedByVersionId and invalidatedAt must be supplied together",
+      });
+    }
+    if (input.invalidatedByVersionId === input.versionId) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["invalidatedByVersionId"],
+        message: "Artifact input cannot be invalidated by the same version it consumes",
+      });
+    }
+  });
 
 export const TaskDeliverableSchema = z
   .object({

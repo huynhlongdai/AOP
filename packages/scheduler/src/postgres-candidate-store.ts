@@ -81,6 +81,14 @@ export class PostgresSchedulerCandidateStore implements SchedulerCandidateStore 
               AND d.dependency_type = 'hard'
               AND prerequisite.state <> 'completed'
          )
+         AND NOT EXISTS (
+           SELECT 1
+             FROM aop.task_artifact_input_status input_status
+            WHERE input_status.organization_id = t.organization_id
+              AND input_status.task_id = t.id
+              AND input_status.required = true
+              AND input_status.stale = true
+         )
        ORDER BY
          CASE t.priority WHEN 'critical' THEN 0 WHEN 'high' THEN 1 WHEN 'medium' THEN 2 ELSE 3 END,
          t.created_at,

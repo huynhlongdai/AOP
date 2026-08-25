@@ -14,6 +14,9 @@ const goalId = `gol_${ulid(31)}`;
 const taskHighId = `tsk_${ulid(31)}`;
 const taskLowId = `tsk_${ulid(32)}`;
 const taskBlockedId = `tsk_${ulid(33)}`;
+const artifactId = `art_${ulid(31)}`;
+const artifactVersionOneId = `arv_${ulid(31)}`;
+const artifactVersionTwoId = `arv_${ulid(32)}`;
 const now = "2026-08-25T08:10:00.000Z";
 
 async function cleanup(): Promise<void> {
@@ -136,5 +139,48 @@ describeDb("PostgresSchedulerCandidateStore", () => {
     );
     await pool.query("UPDATE aop.agents SET capabilities = '[\"frontend\"]'::jsonb WHERE id = $1", [agentId]);
     expect(await new PostgresSchedulerCandidateStore(pool).listCandidates(10, now)).toEqual([]);
+  });
+
+  it("excludes required stale Artifact inputs but permits optional stale inputs", async () => {
+    if (pool === undefined) return;
+    await pool.query(
+      `INSERT INTO aop.artifacts
+        (id,organization_id,type,title,current_approved_version_id,revision,created_at,updated_at)
+       VALUES ($1,$2,'api.spec','Scheduler contract',NULL,2,$3,$3)`,
+      [artifactId, orgId, now],
+    );
+    await pool.query(
+      `INSERT INTO aop.artifact_versions
+        (id,organization_id,artifact_id,version,status,created_by_type,created_by_id,
+         content_uri,mime_type,checksum,size_bytes,approved_by_type,approved_by_id,approved_at,created_at)
+       VALUES
+        ($1,$3,$4,1,'superseded','human',$5,'aop://scheduler/v1','application/json',$6,10,'human',$5,$7,$7),
+        ($2,$3,$4,2,'approved','human',$5,'aop://scheduler/v2','application/json',$8,12,'human',$5,$7,$7)`,
+      [
+        artifactVersionOneId,
+        artifactVersionTwoId,
+        orgId,
+        artifactId,
+        userId,
+        `sha256:${"1".repeat(64)}`,
+        now,
+        `sha256:${"2".repeat(64)}`,
+      ],
+    );
+    await pool.query(
+      `UPDATE aop.artifacts SET current_approved_version_id = $3 WHERE organization_id = $1 AND id = $2`,
+      [orgId, artifactId, artifactVersionTwoId],
+    );
+    await pool.query(
+      `INSERT INTO aop.task_artifact_inputs
+        (organization_id,task_id,artifact_version_id,required,created_at)
+       VALUES
+        ($1,$2,$4,true,$5),
+        ($1,$3,$4,false,$5)`,
+      [orgId, taskHighId, taskLowId, artifactVersionOneId, now],
+    );
+
+    const candidates = await new PostgresSchedulerCandidateStore(pool).listCandidates(10, now);
+    expect(candidates.map((candidate) => candidate.taskId)).toEqual([taskLowId]);
   });
 });

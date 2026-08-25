@@ -1,6 +1,8 @@
 import type { Pool, PoolClient, QueryResult } from "pg";
 
 import type {
+  ArtifactProductionReferenceCheck,
+  ArtifactWriteTransaction,
   AuthorizationResolution,
   AuthorizationResolver,
   BeginDedupInput,
@@ -22,6 +24,10 @@ import {
   RoleSchema,
   type AgentId,
   type ApprovalRequest,
+  type Artifact,
+  type ArtifactId,
+  type ArtifactVersion,
+  type ArtifactVersionId,
   type CommandEnvelope,
   type CommandResult,
   type EventEnvelope,
@@ -37,7 +43,15 @@ import {
   type TaskRun,
 } from "@aop/protocol";
 
-import { mapLease, mapRole, mapTask, mapTaskRun, type QueryRow } from "./query-mappers.js";
+import {
+  mapArtifact,
+  mapArtifactVersion,
+  mapLease,
+  mapRole,
+  mapTask,
+  mapTaskRun,
+  type QueryRow,
+} from "./query-mappers.js";
 
 function timestamp(value: unknown): string {
   if (value instanceof Date) return value.toISOString();
@@ -116,7 +130,66 @@ const RESOURCE_TABLES: Readonly<Record<ResourceRef["type"], string | undefined>>
   context_manifest: "aop.context_manifests:id",
 };
 
-export class PostgresCommandTransaction implements TaskClaimTransaction, LeaseRecoveryTransaction {
+async function insertArtifactVersion(
+  client: PoolClient,
+  version: ArtifactVersion,
+  deliverableType?: string,
+): Promise<void> {
+  await client.query(
+    `INSERT INTO aop.artifact_versions (
+       id, organization_id, artifact_id, version, status, created_by_type, created_by_id,
+       produced_by_task_id, content_uri, mime_type, checksum, size_bytes, content_schema,
+       supersedes_version_id, approved_by_type, approved_by_id, approved_at, created_at
+     ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)`,
+    [
+      version.id,
+      version.organizationId,
+      version.artifactId,
+      version.version,
+      version.status,
+      version.createdBy.type,
+      version.createdBy.id,
+      version.producedByTaskId ?? null,
+      version.content.uri,
+      version.content.mimeType,
+      version.content.checksum,
+      version.content.sizeBytes,
+      version.content.schema ?? null,
+      version.supersedesVersionId ?? null,
+      version.approvedBy?.type ?? null,
+      version.approvedBy?.id ?? null,
+      version.approvedAt ?? null,
+      version.createdAt,
+    ],
+  );
+
+  for (const parentVersionId of version.derivedFromVersionIds) {
+    await client.query(
+      `INSERT INTO aop.artifact_lineage (
+         organization_id, child_version_id, parent_version_id, relationship, created_at
+       ) VALUES ($1,$2,$3,'derived_from',$4)`,
+      [version.organizationId, version.id, parentVersionId, version.createdAt],
+    );
+  }
+
+  if (version.producedByTaskId !== undefined) {
+    if (deliverableType === undefined) {
+      throw new DomainError("invariant_violation", "Task-produced Artifact version requires deliverableType");
+    }
+    await client.query(
+      `INSERT INTO aop.task_artifact_outputs (
+         organization_id, task_id, artifact_version_id, deliverable_type, created_at
+       ) VALUES ($1,$2,$3,$4,$5)`,
+      [version.organizationId, version.producedByTaskId, version.id, deliverableType, version.createdAt],
+    );
+  } else if (deliverableType !== undefined) {
+    throw new DomainError("invariant_violation", "deliverableType requires producedByTaskId");
+  }
+}
+
+export class PostgresCommandTransaction
+  implements TaskClaimTransaction, LeaseRecoveryTransaction, ArtifactWriteTransaction
+{
   readonly #client: PoolClient;
 
   constructor(client: PoolClient) {
@@ -271,6 +344,211 @@ export class PostgresCommandTransaction implements TaskClaimTransaction, LeaseRe
        VALUES ($1,$2,'pending',now(),now())`,
       [event.eventId, event.organizationId],
     );
+  }
+
+  async lockArtifactCreateIdentity(
+    organizationId: OrganizationId,
+    artifactId: ArtifactId,
+  ): Promise<Artifact | undefined> {
+    await this.#client.query("SELECT pg_advisory_xact_lock(hashtextextended($1, 23))", [
+      `artifact-create:${organizationId}:${artifactId}`,
+    ]);
+    return this.lockArtifact(organizationId, artifactId);
+  }
+
+  async lockArtifact(organizationId: OrganizationId, artifactId: ArtifactId): Promise<Artifact | undefined> {
+    const row = await one(
+      this.#client,
+      `SELECT * FROM aop.artifacts WHERE organization_id = $1 AND id = $2 FOR UPDATE`,
+      [organizationId, artifactId],
+    );
+    return row === undefined ? undefined : mapArtifact(row);
+  }
+
+  async artifactVersionById(
+    organizationId: OrganizationId,
+    artifactId: ArtifactId,
+    versionId: ArtifactVersionId,
+  ): Promise<ArtifactVersion | undefined> {
+    const versionRow = await one(
+      this.#client,
+      `SELECT * FROM aop.artifact_versions
+        WHERE organization_id = $1 AND artifact_id = $2 AND id = $3`,
+      [organizationId, artifactId, versionId],
+    );
+    if (versionRow === undefined) return undefined;
+    const derivedRows = await rows(
+      this.#client,
+      `SELECT parent_version_id FROM aop.artifact_lineage
+        WHERE organization_id = $1 AND child_version_id = $2 AND relationship = 'derived_from'
+        ORDER BY parent_version_id`,
+      [organizationId, versionId],
+    );
+    return mapArtifactVersion(
+      versionRow,
+      derivedRows.map((row) => String(row.parent_version_id) as ArtifactVersionId),
+    );
+  }
+
+  async latestArtifactVersion(
+    organizationId: OrganizationId,
+    artifactId: ArtifactId,
+  ): Promise<ArtifactVersion | undefined> {
+    const versionRow = await one(
+      this.#client,
+      `SELECT id FROM aop.artifact_versions
+        WHERE organization_id = $1 AND artifact_id = $2
+        ORDER BY version DESC
+        LIMIT 1`,
+      [organizationId, artifactId],
+    );
+    if (versionRow === undefined) return undefined;
+    return this.artifactVersionById(organizationId, artifactId, String(versionRow.id) as ArtifactVersionId);
+  }
+
+  async checkArtifactProductionReferences(
+    organizationId: OrganizationId,
+    producedByTaskId: TaskId | undefined,
+    derivedFromVersionIds: readonly ArtifactVersionId[],
+  ): Promise<ArtifactProductionReferenceCheck> {
+    const taskMissing =
+      producedByTaskId === undefined
+        ? false
+        : (await one(
+            this.#client,
+            `SELECT 1 FROM aop.tasks WHERE organization_id = $1 AND id = $2`,
+            [organizationId, producedByTaskId],
+          )) === undefined;
+
+    if (derivedFromVersionIds.length === 0) return { taskMissing, missingDerivedVersionIds: [] };
+    const foundRows = await rows(
+      this.#client,
+      `SELECT id FROM aop.artifact_versions
+        WHERE organization_id = $1 AND id = ANY($2::text[])`,
+      [organizationId, [...derivedFromVersionIds]],
+    );
+    const found = new Set(foundRows.map((row) => String(row.id)));
+    return {
+      taskMissing,
+      missingDerivedVersionIds: derivedFromVersionIds.filter((id) => !found.has(id)),
+    };
+  }
+
+  async persistArtifactCreate(artifact: Artifact, version: ArtifactVersion, deliverableType?: string): Promise<void> {
+    await this.#client.query(
+      `INSERT INTO aop.artifacts (
+         id, organization_id, type, title, current_approved_version_id, revision, created_at, updated_at
+       ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
+      [
+        artifact.id,
+        artifact.organizationId,
+        artifact.type,
+        artifact.title,
+        artifact.currentApprovedVersionId ?? null,
+        artifact.revision,
+        artifact.createdAt,
+        artifact.updatedAt,
+      ],
+    );
+    await insertArtifactVersion(this.#client, version, deliverableType);
+  }
+
+  async persistArtifactRevision(artifact: Artifact, version: ArtifactVersion, deliverableType?: string): Promise<void> {
+    const previousRevision = artifact.revision - 1;
+    const update = await this.#client.query(
+      `UPDATE aop.artifacts
+          SET revision = $3, updated_at = $4
+        WHERE organization_id = $1 AND id = $2 AND revision = $5`,
+      [artifact.organizationId, artifact.id, artifact.revision, artifact.updatedAt, previousRevision],
+    );
+    if (update.rowCount !== 1) {
+      throw new DomainError("revision_conflict", "Artifact changed before revision persistence", {
+        artifactId: artifact.id,
+        expectedRevision: previousRevision,
+      });
+    }
+    await insertArtifactVersion(this.#client, version, deliverableType);
+  }
+
+  async persistArtifactLifecycle(
+    artifact: Artifact,
+    version: ArtifactVersion,
+    previousApprovedVersion?: ArtifactVersion,
+  ): Promise<void> {
+    const previousRevision = artifact.revision - 1;
+    const artifactUpdate = await this.#client.query(
+      `UPDATE aop.artifacts
+          SET current_approved_version_id = $3, revision = $4, updated_at = $5
+        WHERE organization_id = $1 AND id = $2 AND revision = $6`,
+      [
+        artifact.organizationId,
+        artifact.id,
+        artifact.currentApprovedVersionId ?? null,
+        artifact.revision,
+        artifact.updatedAt,
+        previousRevision,
+      ],
+    );
+    if (artifactUpdate.rowCount !== 1) {
+      throw new DomainError("revision_conflict", "Artifact changed before lifecycle persistence", {
+        artifactId: artifact.id,
+        expectedRevision: previousRevision,
+      });
+    }
+
+    const expectedStatus =
+      version.status === "in_review"
+        ? "draft"
+        : version.status === "approved" || version.status === "rejected"
+          ? "in_review"
+          : undefined;
+    if (expectedStatus === undefined) {
+      throw new DomainError("invariant_violation", "Unsupported ArtifactVersion lifecycle persistence", {
+        versionId: version.id,
+        status: version.status,
+      });
+    }
+    const versionUpdate = await this.#client.query(
+      `UPDATE aop.artifact_versions
+          SET status = $4, approved_by_type = $5, approved_by_id = $6, approved_at = $7
+        WHERE organization_id = $1 AND artifact_id = $2 AND id = $3 AND status = $8`,
+      [
+        version.organizationId,
+        version.artifactId,
+        version.id,
+        version.status,
+        version.approvedBy?.type ?? null,
+        version.approvedBy?.id ?? null,
+        version.approvedAt ?? null,
+        expectedStatus,
+      ],
+    );
+    if (versionUpdate.rowCount !== 1) {
+      throw new DomainError("revision_conflict", "ArtifactVersion changed before lifecycle persistence", {
+        versionId: version.id,
+        expectedStatus,
+      });
+    }
+
+    if (previousApprovedVersion !== undefined) {
+      if (previousApprovedVersion.status !== "superseded") {
+        throw new DomainError("invariant_violation", "Previous approved ArtifactVersion must be superseded", {
+          versionId: previousApprovedVersion.id,
+          status: previousApprovedVersion.status,
+        });
+      }
+      const previousUpdate = await this.#client.query(
+        `UPDATE aop.artifact_versions
+            SET status = 'superseded'
+          WHERE organization_id = $1 AND artifact_id = $2 AND id = $3 AND status = 'approved'`,
+        [previousApprovedVersion.organizationId, previousApprovedVersion.artifactId, previousApprovedVersion.id],
+      );
+      if (previousUpdate.rowCount !== 1) {
+        throw new DomainError("revision_conflict", "Previous approved ArtifactVersion changed before supersession", {
+          versionId: previousApprovedVersion.id,
+        });
+      }
+    }
   }
 
   async lockTask(organizationId: OrganizationId, taskId: TaskId): Promise<Task | undefined> {

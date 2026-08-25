@@ -4,8 +4,8 @@ BEGIN;
 
 DO $$
 BEGIN
-  IF (SELECT count(*) FROM aop.schema_migrations) <> 7 THEN
-    RAISE EXCEPTION 'expected 7 applied migrations';
+  IF (SELECT count(*) FROM aop.schema_migrations) <> 11 THEN
+    RAISE EXCEPTION 'expected 11 applied migrations';
   END IF;
 END $$;
 
@@ -57,6 +57,15 @@ BEGIN
     );
     RAISE EXCEPTION 'cross-org goal reference was incorrectly accepted';
   EXCEPTION WHEN foreign_key_violation THEN NULL;
+  END;
+
+  BEGIN
+    UPDATE aop.tasks
+       SET state = 'completed', completed_at = now(), revision = revision + 1
+     WHERE organization_id = 'org_00000000000000000000000001'
+       AND id = 'tsk_00000000000000000000000001';
+    RAISE EXCEPTION 'task completion without passing review was incorrectly accepted';
+  EXCEPTION WHEN check_violation THEN NULL;
   END;
 END $$;
 

@@ -114,3 +114,21 @@ jobs:
 
       - name: Validate lease heartbeat and recovery against PostgreSQL
         run: pnpm exec vitest run packages/database/src/lease-recovery.integration.test.ts
+
+      - name: Validate Artifact write path against PostgreSQL
+        run: pnpm exec vitest run packages/database/src/artifact-write.integration.test.ts
+
+      - name: Validate Artifact review lifecycle against PostgreSQL
+        run: pnpm exec vitest run packages/database/src/artifact-lifecycle.integration.test.ts
+
+      - name: Validate Artifact consumer invalidation against PostgreSQL
+        run: pnpm exec vitest run packages/database/src/artifact-consumer-invalidation.integration.test.ts
+
+      - name: Validate Task QA review lifecycle against PostgreSQL
+        run: pnpm exec vitest run packages/database/src/task-review.integration.test.ts
+
+      - name: Validate Decision authority and supersession against PostgreSQL
+        run: pnpm exec vitest run packages/database/src/decision-governance.integration.test.ts
+
+      - name: Validate verified organizational reporting against PostgreSQL
+        run: pnpm exec vitest run packages/database/src/reporting-store.integration.test.ts
