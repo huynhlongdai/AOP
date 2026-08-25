@@ -365,17 +365,16 @@ export class PostgresCommandTransaction
     return row === undefined ? undefined : mapArtifact(row);
   }
 
-  async latestArtifactVersion(
+  async artifactVersionById(
     organizationId: OrganizationId,
     artifactId: ArtifactId,
+    versionId: ArtifactVersionId,
   ): Promise<ArtifactVersion | undefined> {
     const versionRow = await one(
       this.#client,
       `SELECT * FROM aop.artifact_versions
-        WHERE organization_id = $1 AND artifact_id = $2
-        ORDER BY version DESC
-        LIMIT 1`,
-      [organizationId, artifactId],
+        WHERE organization_id = $1 AND artifact_id = $2 AND id = $3`,
+      [organizationId, artifactId, versionId],
     );
     if (versionRow === undefined) return undefined;
     const derivedRows = await rows(
@@ -383,12 +382,28 @@ export class PostgresCommandTransaction
       `SELECT parent_version_id FROM aop.artifact_lineage
         WHERE organization_id = $1 AND child_version_id = $2 AND relationship = 'derived_from'
         ORDER BY parent_version_id`,
-      [organizationId, versionRow.id],
+      [organizationId, versionId],
     );
     return mapArtifactVersion(
       versionRow,
       derivedRows.map((row) => String(row.parent_version_id) as ArtifactVersionId),
     );
+  }
+
+  async latestArtifactVersion(
+    organizationId: OrganizationId,
+    artifactId: ArtifactId,
+  ): Promise<ArtifactVersion | undefined> {
+    const versionRow = await one(
+      this.#client,
+      `SELECT id FROM aop.artifact_versions
+        WHERE organization_id = $1 AND artifact_id = $2
+        ORDER BY version DESC
+        LIMIT 1`,
+      [organizationId, artifactId],
+    );
+    if (versionRow === undefined) return undefined;
+    return this.artifactVersionById(organizationId, artifactId, String(versionRow.id) as ArtifactVersionId);
   }
 
   async checkArtifactProductionReferences(
@@ -453,6 +468,87 @@ export class PostgresCommandTransaction
       });
     }
     await insertArtifactVersion(this.#client, version, deliverableType);
+  }
+
+  async persistArtifactLifecycle(
+    artifact: Artifact,
+    version: ArtifactVersion,
+    previousApprovedVersion?: ArtifactVersion,
+  ): Promise<void> {
+    const previousRevision = artifact.revision - 1;
+    const artifactUpdate = await this.#client.query(
+      `UPDATE aop.artifacts
+          SET current_approved_version_id = $3, revision = $4, updated_at = $5
+        WHERE organization_id = $1 AND id = $2 AND revision = $6`,
+      [
+        artifact.organizationId,
+        artifact.id,
+        artifact.currentApprovedVersionId ?? null,
+        artifact.revision,
+        artifact.updatedAt,
+        previousRevision,
+      ],
+    );
+    if (artifactUpdate.rowCount !== 1) {
+      throw new DomainError("revision_conflict", "Artifact changed before lifecycle persistence", {
+        artifactId: artifact.id,
+        expectedRevision: previousRevision,
+      });
+    }
+
+    const expectedStatus =
+      version.status === "in_review"
+        ? "draft"
+        : version.status === "approved" || version.status === "rejected"
+          ? "in_review"
+          : undefined;
+    if (expectedStatus === undefined) {
+      throw new DomainError("invariant_violation", "Unsupported ArtifactVersion lifecycle persistence", {
+        versionId: version.id,
+        status: version.status,
+      });
+    }
+    const versionUpdate = await this.#client.query(
+      `UPDATE aop.artifact_versions
+          SET status = $4, approved_by_type = $5, approved_by_id = $6, approved_at = $7
+        WHERE organization_id = $1 AND artifact_id = $2 AND id = $3 AND status = $8`,
+      [
+        version.organizationId,
+        version.artifactId,
+        version.id,
+        version.status,
+        version.approvedBy?.type ?? null,
+        version.approvedBy?.id ?? null,
+        version.approvedAt ?? null,
+        expectedStatus,
+      ],
+    );
+    if (versionUpdate.rowCount !== 1) {
+      throw new DomainError("revision_conflict", "ArtifactVersion changed before lifecycle persistence", {
+        versionId: version.id,
+        expectedStatus,
+      });
+    }
+
+    if (previousApprovedVersion !== undefined) {
+      if (previousApprovedVersion.status !== "superseded") {
+        throw new DomainError("invariant_violation", "Previous approved ArtifactVersion must be superseded", {
+          versionId: previousApprovedVersion.id,
+          status: previousApprovedVersion.status,
+        });
+      }
+      const previousUpdate = await this.#client.query(
+        `UPDATE aop.artifact_versions
+            SET status = 'superseded'
+          WHERE organization_id = $1 AND artifact_id = $2 AND id = $3 AND status = 'approved'`,
+        [previousApprovedVersion.organizationId, previousApprovedVersion.artifactId, previousApprovedVersion.id],
+      );
+      if (previousUpdate.rowCount !== 1) {
+        throw new DomainError("revision_conflict", "Previous approved ArtifactVersion changed before supersession", {
+          versionId: previousApprovedVersion.id,
+        });
+      }
+    }
   }
 
   async lockTask(organizationId: OrganizationId, taskId: TaskId): Promise<Task | undefined> {
