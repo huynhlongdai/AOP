@@ -4,6 +4,7 @@ import {
   AgentIdSchema,
   ArtifactIdSchema,
   ArtifactVersionIdSchema,
+  ContextManifestIdSchema,
   DecisionIdSchema,
   LeaseIdSchema,
   ReviewIdSchema,
@@ -14,6 +15,23 @@ import { ResourceRefSchema } from "./resource-ref.js";
 
 const CapabilityTokenSchema = z.string().min(2).max(128).regex(/^[a-z][a-z0-9_.:-]+$/);
 const Sha256Schema = z.string().regex(/^sha256:[a-f0-9]{64}$/);
+
+const RuntimeTraceRefInputSchema = z
+  .object({
+    provider: z.string().trim().min(1).max(80),
+    traceId: z.string().trim().min(1).max(240),
+    spanId: z.string().trim().min(1).max(240).optional(),
+  })
+  .strict();
+
+const RuntimeUsageInputSchema = z
+  .object({
+    inputTokens: z.number().int().nonnegative(),
+    outputTokens: z.number().int().nonnegative(),
+    toolCalls: z.number().int().nonnegative(),
+    costCredits: z.number().nonnegative().optional(),
+  })
+  .strict();
 
 const ArtifactContentInputSchema = z
   .object({
@@ -86,6 +104,41 @@ export const TaskClaimPayloadSchema = z
         path: ["heartbeatIntervalSeconds"],
         message: "heartbeatIntervalSeconds must be shorter than leaseSeconds",
       });
+    }
+  });
+
+export const TaskRunPreparePayloadSchema = z
+  .object({
+    runtimeId: z.string().trim().min(1).max(240),
+    contextManifestId: ContextManifestIdSchema,
+    adapter: CapabilityTokenSchema,
+    provider: z.string().trim().min(1).max(80).optional(),
+    model: z.string().trim().min(1).max(160).optional(),
+    traceRefs: z.array(RuntimeTraceRefInputSchema).max(128).default([]),
+  })
+  .strict();
+
+export const TaskRunStartPayloadSchema = z
+  .object({
+    taskExpectedRevision: z.number().int().nonnegative(),
+  })
+  .strict();
+
+export const TaskRunFinishPayloadSchema = z
+  .object({
+    taskExpectedRevision: z.number().int().nonnegative(),
+    status: z.enum(["succeeded", "failed", "cancelled"]),
+    usage: RuntimeUsageInputSchema,
+    traceRefs: z.array(RuntimeTraceRefInputSchema).max(256).default([]),
+    failureReason: z.string().trim().min(1).max(2_000).optional(),
+  })
+  .strict()
+  .superRefine((payload, ctx) => {
+    if (payload.status === "failed" && payload.failureReason === undefined) {
+      ctx.addIssue({ code: "custom", path: ["failureReason"], message: "failed TaskRun requires failureReason" });
+    }
+    if (payload.status === "succeeded" && payload.failureReason !== undefined) {
+      ctx.addIssue({ code: "custom", path: ["failureReason"], message: "succeeded TaskRun cannot include failureReason" });
     }
   });
 
@@ -189,6 +242,9 @@ export const DecisionActivatePayloadSchema = z
 export const DecisionRejectPayloadSchema = z.object({}).strict();
 
 export type TaskClaimPayload = z.infer<typeof TaskClaimPayloadSchema>;
+export type TaskRunPreparePayload = z.infer<typeof TaskRunPreparePayloadSchema>;
+export type TaskRunStartPayload = z.infer<typeof TaskRunStartPayloadSchema>;
+export type TaskRunFinishPayload = z.infer<typeof TaskRunFinishPayloadSchema>;
 export type TaskSubmitReviewPayload = z.infer<typeof TaskSubmitReviewPayloadSchema>;
 export type ReviewResolvePayload = z.infer<typeof ReviewResolvePayloadSchema>;
 export type LeaseHeartbeatPayload = z.infer<typeof LeaseHeartbeatPayloadSchema>;
