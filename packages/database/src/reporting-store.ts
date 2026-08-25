@@ -42,8 +42,10 @@ async function buildReport(
     reviewRows,
     artifactRows,
     staleLinkRows,
+    staleCompletedRows,
     blockedTaskRows,
     staleTaskRows,
+    blockingDecisionRows,
     pendingDecisionRows,
     reworkReviewRows,
     eventRows,
@@ -81,15 +83,42 @@ async function buildReport(
         WHERE organization_id = $1 AND required = true AND stale = true`,
       [organizationId],
     ),
+    client.query<{ count: string | number }>(
+      `SELECT count(*) AS count
+         FROM aop.tasks task
+        WHERE task.organization_id = $1
+          AND task.state = 'completed'
+          AND EXISTS (
+            SELECT 1
+              FROM aop.task_artifact_input_status input_status
+             WHERE input_status.organization_id = task.organization_id
+               AND input_status.task_id = task.id
+               AND input_status.required = true
+               AND input_status.stale = true
+          )`,
+      [organizationId],
+    ),
     client.query<IdRow>(
       "SELECT id FROM aop.tasks WHERE organization_id = $1 AND state = 'blocked' ORDER BY id",
       [organizationId],
     ),
-    client.query<{ id: string }>(
+    client.query<IdRow>(
       `SELECT DISTINCT task_id AS id
          FROM aop.task_artifact_input_status
         WHERE organization_id = $1 AND required = true AND stale = true
         ORDER BY task_id`,
+      [organizationId],
+    ),
+    client.query<IdRow>(
+      `SELECT DISTINCT impact.decision_id AS id
+         FROM aop.decision_impacts impact
+         JOIN aop.decisions decision
+           ON decision.organization_id = impact.organization_id
+          AND decision.id = impact.decision_id
+        WHERE impact.organization_id = $1
+          AND impact.impact_type = 'blocks'
+          AND decision.status NOT IN ('rejected','superseded')
+        ORDER BY impact.decision_id`,
       [organizationId],
     ),
     client.query<IdRow>(
@@ -114,7 +143,9 @@ async function buildReport(
   const leases = countMap(leaseRows.rows);
   const decisions = countMap(decisionRows.rows);
   const reviews = countMap(reviewRows.rows);
-  const completedTasks = count(tasks, "completed");
+  const historicalCompletedTasks = count(tasks, "completed");
+  const staleCompletedTasks = Number(staleCompletedRows.rows[0]?.count ?? 0);
+  const verifiedCompletedTasks = Math.max(0, historicalCompletedTasks - staleCompletedTasks);
   const eligibleTasks =
     [...tasks.values()].reduce((total, value) => total + value, 0) - count(tasks, "cancelled") - count(tasks, "rejected");
   const artifactCounts = artifactRows.rows[0] ?? { total: 0, approved: 0 };
@@ -132,7 +163,7 @@ async function buildReport(
       running: count(tasks, "running"),
       blocked: count(tasks, "blocked"),
       review: count(tasks, "review"),
-      completed: completedTasks,
+      completed: historicalCompletedTasks,
       failed: count(tasks, "failed"),
       cancelled: count(tasks, "cancelled"),
       rejected: count(tasks, "rejected"),
@@ -173,12 +204,16 @@ async function buildReport(
     },
     verifiedProgress: {
       eligibleTasks,
-      completedTasks,
-      ratio: eligibleTasks === 0 ? 0 : completedTasks / eligibleTasks,
+      verifiedCompletedTasks,
+      staleCompletedTasks,
+      ratio: eligibleTasks === 0 ? 0 : verifiedCompletedTasks / eligibleTasks,
     },
     blockers: {
       blockedTaskIds: blockedTaskRows.rows.map((row) => row.id as TaskId),
       staleInputTaskIds: staleTaskRows.rows.map((row) => row.id as TaskId),
+      blockingDecisionIds: blockingDecisionRows.rows.map((row) => row.id as DecisionId),
+    },
+    attention: {
       pendingDecisionIds: pendingDecisionRows.rows.map((row) => row.id as DecisionId),
       reworkReviewIds: reworkReviewRows.rows.map((row) => row.id as ReviewId),
     },
