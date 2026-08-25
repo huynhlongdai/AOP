@@ -117,3 +117,6 @@ jobs:
 
       - name: Validate Artifact write path against PostgreSQL
         run: pnpm exec vitest run packages/database/src/artifact-write.integration.test.ts
+
+      - name: Validate Artifact review lifecycle against PostgreSQL
+        run: pnpm exec vitest run packages/database/src/artifact-lifecycle.integration.test.ts
