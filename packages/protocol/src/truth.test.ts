@@ -52,6 +52,27 @@ describe("organizational truth schemas", () => {
     ).toBe(false);
   });
 
+  it("requires superseded decisions to preserve approval history", () => {
+    expect(
+      DecisionSchema.safeParse({
+        id: `dec_${ULID}`,
+        organizationId: `org_${ULID}`,
+        scope: "engineering.architecture",
+        question: "Which API contract should be active?",
+        options: [{ id: "v4", label: "Adopt v4" }],
+        selectedOptionId: "v4",
+        rationale: "Historical rationale",
+        proposedBy: { type: "agent", id: `agt_${ULID}` },
+        authorityCapability: "decision.engineering.approve",
+        status: "superseded",
+        affectedResources: [],
+        revision: 3,
+        createdAt: now,
+        updatedAt: now,
+      }).success,
+    ).toBe(false);
+  });
+
   it("requires completedAt for completed reviews", () => {
     expect(
       ReviewSchema.safeParse({
@@ -67,6 +88,44 @@ describe("organizational truth schemas", () => {
         revision: 1,
       }).success,
     ).toBe(false);
+  });
+
+  it("requires evidence for a passing review", () => {
+    expect(
+      ReviewSchema.safeParse({
+        id: `rev_${ULID}`,
+        organizationId: `org_${ULID}`,
+        subject: { type: "task", id: `tsk_${ULID}` },
+        reviewer: { type: "agent", id: `agt_${ULID}` },
+        criteria: [{ key: "tests.pass", description: "Automated tests pass", required: true }],
+        evidence: [],
+        result: "pass",
+        findings: [],
+        createdAt: now,
+        completedAt: now,
+        revision: 1,
+      }).success,
+    ).toBe(false);
+  });
+
+  it("requires findings for rework and failed reviews", () => {
+    for (const result of ["rework", "fail"] as const) {
+      expect(
+        ReviewSchema.safeParse({
+          id: `rev_${ULID}`,
+          organizationId: `org_${ULID}`,
+          subject: { type: "task", id: `tsk_${ULID}` },
+          reviewer: { type: "agent", id: `agt_${ULID}` },
+          criteria: [{ key: "tests.pass", description: "Automated tests pass", required: true }],
+          evidence: [],
+          result,
+          findings: [],
+          createdAt: now,
+          completedAt: now,
+          revision: 1,
+        }).success,
+      ).toBe(false);
+    }
   });
 
   it("models permission effect independently from the principal identity", () => {
@@ -105,5 +164,29 @@ describe("organizational truth schemas", () => {
         createdAt: now,
       }).success,
     ).toBe(false);
+  });
+
+  it("rejects decision metadata on expired or cancelled approvals", () => {
+    for (const status of ["expired", "cancelled"] as const) {
+      expect(
+        ApprovalRequestSchema.safeParse({
+          id: `apr_${ULID}`,
+          organizationId: `org_${ULID}`,
+          commandId: `cmd_${ULID}`,
+          commandType: "production.deploy.staging",
+          requestedBy: { type: "agent", id: `agt_${ULID}` },
+          policyRule: "deploy.protected_environment",
+          requiredAuthority: "human",
+          risk: "high",
+          evidence: [],
+          impactSummary: "Deploy authentication service to shared staging.",
+          status,
+          decidedBy: { type: "human", id: `usr_${ULID}` },
+          decidedAt: now,
+          revision: 1,
+          createdAt: now,
+        }).success,
+      ).toBe(false);
+    }
   });
 });
