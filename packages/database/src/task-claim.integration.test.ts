@@ -76,6 +76,8 @@ function command(taskId: string, suffix: number): CommandEnvelope {
 
 async function cleanup(): Promise<void> {
   if (pool === undefined) return;
+  await pool.query("DELETE FROM aop.leases WHERE organization_id = $1", [orgId]);
+  await pool.query("DELETE FROM aop.task_runs WHERE organization_id = $1", [orgId]);
   await pool.query("DELETE FROM aop.organizations WHERE id = $1", [orgId]);
   await pool.query("DELETE FROM aop.agents WHERE id = $1", [agentId]);
 }
