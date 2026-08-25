@@ -39,7 +39,7 @@ CREATE TABLE aop.organizations (
 CREATE TABLE aop.agents (
   id text PRIMARY KEY CHECK (aop.is_prefixed_ulid(id, 'agt')),
   name varchar(120) NOT NULL CHECK (length(btrim(name)) > 0),
-  version varchar(120) NOT NULL CHECK (version ~ '^\d+\.\d+\.\d+([.-][0-9A-Za-z.-]+)?$'),
+  version varchar(120) NOT NULL CHECK (version ~ '^[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z.-]+)?$'),
   description text CHECK (description IS NULL OR length(description) <= 2000),
   capabilities jsonb NOT NULL DEFAULT '[]'::jsonb CHECK (jsonb_typeof(capabilities) = 'array'),
   runtime jsonb NOT NULL CHECK (jsonb_typeof(runtime) = 'object'),
