@@ -6,7 +6,11 @@
     "outDir": "dist",
     "tsBuildInfoFile": "dist/.tsbuildinfo"
   },
-  "references": [{ "path": "../protocol" }],
+  "references": [
+    { "path": "../protocol" },
+    { "path": "../domain" },
+    { "path": "../command-bus" }
+  ],
   "include": ["src/**/*.ts"],
   "exclude": ["src/**/*.test.ts"]
 }
