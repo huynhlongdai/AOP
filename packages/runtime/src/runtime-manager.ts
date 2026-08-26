@@ -34,7 +34,6 @@ export interface RuntimePrepareInput {
   readonly organizationId: OrganizationId;
   readonly runId: TaskRunId;
   readonly agent: Agent;
-  readonly context: ContextManifest;
   readonly policy: RuntimeExecutionPolicy;
 }
 
@@ -44,6 +43,15 @@ export interface PreparedRuntime {
   readonly provider?: string;
   readonly model?: string;
   readonly traceRefs: readonly RuntimeTraceRef[];
+}
+
+export interface RuntimeStartInput {
+  readonly prepared: PreparedRuntime;
+  readonly organizationId: OrganizationId;
+  readonly runId: TaskRunId;
+  readonly agent: Agent;
+  readonly context: ContextManifest;
+  readonly policy: RuntimeExecutionPolicy;
 }
 
 export interface RuntimeExecutionResult {
@@ -64,7 +72,7 @@ export interface RuntimeInspection {
 export interface RuntimeAdapter {
   readonly name: string;
   prepare(input: RuntimePrepareInput): Promise<PreparedRuntime>;
-  start(prepared: PreparedRuntime): Promise<RuntimeExecutionResult>;
+  start(input: RuntimeStartInput): Promise<RuntimeExecutionResult>;
   cancel(runtimeId: string, reason?: string): Promise<void>;
   inspect(runtimeId: string): Promise<RuntimeInspection>;
 }
@@ -108,7 +116,6 @@ export interface KernelRuntimePort {
     readonly adapter: string;
     readonly provider?: string;
     readonly model?: string;
-    readonly contextManifestId: ContextManifestId;
     readonly traceRefs: readonly RuntimeTraceRef[];
   }): Promise<void>;
   recordRunning(input: {
@@ -154,7 +161,7 @@ export interface RuntimeRunReport {
   readonly organizationId: OrganizationId;
   readonly runId: TaskRunId;
   readonly agentId: AgentId;
-  readonly contextManifestId: ContextManifestId;
+  readonly contextManifestId?: ContextManifestId;
   readonly runtimeId: string;
   readonly adapter: string;
   readonly provider?: string;
@@ -207,6 +214,10 @@ function normalizeFailure(error: unknown): string {
   return "Runtime adapter failed without a structured error";
 }
 
+function boundedFailure(prefix: string, error: unknown): string {
+  return `${prefix}: ${normalizeFailure(error)}`.slice(0, 2_000);
+}
+
 function traceUnion(...groups: readonly (readonly RuntimeTraceRef[])[]): RuntimeTraceRef[] {
   const seen = new Set<string>();
   const result: RuntimeTraceRef[] = [];
@@ -243,19 +254,10 @@ export class RuntimeManager {
     validatePolicy(input.policy);
     assertNonNegativeInteger(input.maxContextTokens, "maxContextTokens");
 
-    const context = await this.#context.getOrCompile({
-      organizationId: input.organizationId,
-      runId: input.runId,
-      manifestId: input.manifestId,
-      maxTokens: input.maxContextTokens,
-    });
-    validateManifestIdentity(input, context);
-
     const prepared = await this.#adapter.prepare({
       organizationId: input.organizationId,
       runId: input.runId,
       agent: input.agent,
-      context,
       policy: input.policy,
     });
     if (prepared.runtimeId.trim().length === 0) throw new Error("Runtime adapter returned an empty runtimeId");
@@ -272,7 +274,6 @@ export class RuntimeManager {
         adapter: prepared.adapter,
         ...(prepared.provider === undefined ? {} : { provider: prepared.provider }),
         ...(prepared.model === undefined ? {} : { model: prepared.model }),
-        contextManifestId: context.id,
         traceRefs: prepared.traceRefs,
       });
       await this.#kernel.recordRunning({
@@ -291,9 +292,66 @@ export class RuntimeManager {
     }
 
     const startedAt = this.#now();
+    let context: ContextManifest;
+    try {
+      context = await this.#context.getOrCompile({
+        organizationId: input.organizationId,
+        runId: input.runId,
+        manifestId: input.manifestId,
+        maxTokens: input.maxContextTokens,
+      });
+      validateManifestIdentity(input, context);
+    } catch (error) {
+      const failureReason = boundedFailure("Context compilation failed", error);
+      try {
+        await this.#adapter.cancel(prepared.runtimeId, "context_compile_failed");
+      } catch {
+        // The authoritative failed Run Report remains the primary recovery record.
+      }
+      const traceRefs = traceUnion(prepared.traceRefs);
+      const usage: RuntimeUsage = { inputTokens: 0, outputTokens: 0, toolCalls: 0 };
+      await this.#kernel.recordFinished({
+        organizationId: input.organizationId,
+        runId: input.runId,
+        agentId: input.agent.id,
+        runtimeId: prepared.runtimeId,
+        adapter: prepared.adapter,
+        ...(prepared.provider === undefined ? {} : { provider: prepared.provider }),
+        ...(prepared.model === undefined ? {} : { model: prepared.model }),
+        status: "failed",
+        usage,
+        traceRefs,
+        commandOutcomes: [],
+        failureReason,
+      });
+      return {
+        organizationId: input.organizationId,
+        runId: input.runId,
+        agentId: input.agent.id,
+        runtimeId: prepared.runtimeId,
+        adapter: prepared.adapter,
+        ...(prepared.provider === undefined ? {} : { provider: prepared.provider }),
+        ...(prepared.model === undefined ? {} : { model: prepared.model }),
+        status: "failed",
+        startedAt,
+        finishedAt: this.#now(),
+        usage,
+        traceRefs,
+        commandOutcomes: [],
+        failureReason,
+      };
+    }
+
     let execution: RuntimeExecutionResult;
     try {
-      execution = await this.#adapter.start(prepared);
+      execution = await this.#adapter.start({
+        prepared,
+        organizationId: input.organizationId,
+        runId: input.runId,
+        agent: input.agent,
+        context,
+        policy: input.policy,
+      });
       validateUsage(execution.usage);
       if (input.policy.maxToolCalls !== undefined && execution.usage.toolCalls > input.policy.maxToolCalls) {
         execution = {
