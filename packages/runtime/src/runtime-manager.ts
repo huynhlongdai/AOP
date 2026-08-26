@@ -154,6 +154,7 @@ export interface ExecuteRuntimeInput {
   readonly agent: Agent;
   readonly manifestId: ContextManifestId;
   readonly maxContextTokens: number;
+  readonly heartbeatIntervalMs?: number;
   readonly policy: RuntimeExecutionPolicy;
 }
 
@@ -179,6 +180,12 @@ export interface RuntimeRunReport {
 function assertNonNegativeInteger(value: number | undefined, field: string): void {
   if (value !== undefined && (!Number.isInteger(value) || value < 0)) {
     throw new TypeError(`${field} must be a non-negative integer`);
+  }
+}
+
+function assertPositiveInteger(value: number | undefined, field: string): void {
+  if (value !== undefined && (!Number.isInteger(value) || value < 1)) {
+    throw new TypeError(`${field} must be a positive integer`);
   }
 }
 
@@ -232,6 +239,63 @@ function traceUnion(...groups: readonly (readonly RuntimeTraceRef[])[]): Runtime
   return result;
 }
 
+interface HeartbeatSupervisor {
+  readonly failureReason: () => string | undefined;
+  stop(): void;
+}
+
+function startHeartbeatSupervisor(input: {
+  readonly intervalMs: number | undefined;
+  readonly heartbeat: () => Promise<void>;
+  readonly cancel: () => Promise<void>;
+}): HeartbeatSupervisor {
+  if (input.intervalMs === undefined) {
+    return { failureReason: () => undefined, stop: () => undefined };
+  }
+
+  let active = true;
+  let inFlight = false;
+  let failureReason: string | undefined;
+  const timer = setInterval(() => {
+    if (!active || inFlight || failureReason !== undefined) return;
+    inFlight = true;
+    void input
+      .heartbeat()
+      .catch((error: unknown) => {
+        if (!active || failureReason !== undefined) return;
+        failureReason = boundedFailure("Lease heartbeat failed", error);
+        void input.cancel().catch(() => {
+          // The heartbeat failure remains the authoritative local failure reason.
+        });
+      })
+      .finally(() => {
+        inFlight = false;
+      });
+  }, input.intervalMs);
+  timer.unref();
+
+  return {
+    failureReason: () => failureReason,
+    stop: () => {
+      active = false;
+      clearInterval(timer);
+    },
+  };
+}
+
+function heartbeatFailureExecution(
+  failureReason: string,
+  execution?: RuntimeExecutionResult,
+): RuntimeExecutionResult {
+  return {
+    status: "failed",
+    commandProposals: [],
+    usage: execution?.usage ?? { inputTokens: 0, outputTokens: 0, toolCalls: 0 },
+    traceRefs: execution?.traceRefs ?? [],
+    failureReason,
+  };
+}
+
 export class RuntimeManager {
   readonly #context: ContextManifestProvider;
   readonly #kernel: KernelRuntimePort;
@@ -253,6 +317,7 @@ export class RuntimeManager {
   async execute(input: ExecuteRuntimeInput): Promise<RuntimeRunReport> {
     validatePolicy(input.policy);
     assertNonNegativeInteger(input.maxContextTokens, "maxContextTokens");
+    assertPositiveInteger(input.heartbeatIntervalMs, "heartbeatIntervalMs");
 
     const prepared = await this.#adapter.prepare({
       organizationId: input.organizationId,
@@ -291,6 +356,18 @@ export class RuntimeManager {
       throw error;
     }
 
+    const heartbeat = startHeartbeatSupervisor({
+      intervalMs: input.heartbeatIntervalMs,
+      heartbeat: () =>
+        this.#kernel.heartbeat({
+          organizationId: input.organizationId,
+          runId: input.runId,
+          agentId: input.agent.id,
+          runtimeId: prepared.runtimeId,
+        }),
+      cancel: () => this.#adapter.cancel(prepared.runtimeId, "lease_heartbeat_failed"),
+    });
+
     const startedAt = this.#now();
     let context: ContextManifest;
     try {
@@ -302,28 +379,35 @@ export class RuntimeManager {
       });
       validateManifestIdentity(input, context);
     } catch (error) {
-      const failureReason = boundedFailure("Context compilation failed", error);
+      const failureReason = heartbeat.failureReason() ?? boundedFailure("Context compilation failed", error);
       try {
-        await this.#adapter.cancel(prepared.runtimeId, "context_compile_failed");
+        await this.#adapter.cancel(
+          prepared.runtimeId,
+          heartbeat.failureReason() === undefined ? "context_compile_failed" : "lease_heartbeat_failed",
+        );
       } catch {
         // The authoritative failed Run Report remains the primary recovery record.
       }
       const traceRefs = traceUnion(prepared.traceRefs);
       const usage: RuntimeUsage = { inputTokens: 0, outputTokens: 0, toolCalls: 0 };
-      await this.#kernel.recordFinished({
-        organizationId: input.organizationId,
-        runId: input.runId,
-        agentId: input.agent.id,
-        runtimeId: prepared.runtimeId,
-        adapter: prepared.adapter,
-        ...(prepared.provider === undefined ? {} : { provider: prepared.provider }),
-        ...(prepared.model === undefined ? {} : { model: prepared.model }),
-        status: "failed",
-        usage,
-        traceRefs,
-        commandOutcomes: [],
-        failureReason,
-      });
+      try {
+        await this.#kernel.recordFinished({
+          organizationId: input.organizationId,
+          runId: input.runId,
+          agentId: input.agent.id,
+          runtimeId: prepared.runtimeId,
+          adapter: prepared.adapter,
+          ...(prepared.provider === undefined ? {} : { provider: prepared.provider }),
+          ...(prepared.model === undefined ? {} : { model: prepared.model }),
+          status: "failed",
+          usage,
+          traceRefs,
+          commandOutcomes: [],
+          failureReason,
+        });
+      } finally {
+        heartbeat.stop();
+      }
       return {
         organizationId: input.organizationId,
         runId: input.runId,
@@ -343,46 +427,61 @@ export class RuntimeManager {
     }
 
     let execution: RuntimeExecutionResult;
-    try {
-      execution = await this.#adapter.start({
-        prepared,
-        organizationId: input.organizationId,
-        runId: input.runId,
-        agent: input.agent,
-        context,
-        policy: input.policy,
-      });
-      validateUsage(execution.usage);
-      if (input.policy.maxToolCalls !== undefined && execution.usage.toolCalls > input.policy.maxToolCalls) {
+    const preReasoningHeartbeatFailure = heartbeat.failureReason();
+    if (preReasoningHeartbeatFailure !== undefined) {
+      execution = heartbeatFailureExecution(preReasoningHeartbeatFailure);
+    } else {
+      try {
+        execution = await this.#adapter.start({
+          prepared,
+          organizationId: input.organizationId,
+          runId: input.runId,
+          agent: input.agent,
+          context,
+          policy: input.policy,
+        });
+        validateUsage(execution.usage);
+        if (input.policy.maxToolCalls !== undefined && execution.usage.toolCalls > input.policy.maxToolCalls) {
+          execution = {
+            ...execution,
+            status: "failed",
+            commandProposals: [],
+            failureReason: `Runtime exceeded maxToolCalls (${execution.usage.toolCalls} > ${input.policy.maxToolCalls})`,
+          };
+        }
+        if (input.policy.maxOutputTokens !== undefined && execution.usage.outputTokens > input.policy.maxOutputTokens) {
+          execution = {
+            ...execution,
+            status: "failed",
+            commandProposals: [],
+            failureReason: `Runtime exceeded maxOutputTokens (${execution.usage.outputTokens} > ${input.policy.maxOutputTokens})`,
+          };
+        }
+      } catch (error) {
         execution = {
-          ...execution,
           status: "failed",
           commandProposals: [],
-          failureReason: `Runtime exceeded maxToolCalls (${execution.usage.toolCalls} > ${input.policy.maxToolCalls})`,
+          usage: { inputTokens: 0, outputTokens: 0, toolCalls: 0 },
+          traceRefs: [],
+          failureReason: normalizeFailure(error),
         };
       }
-      if (input.policy.maxOutputTokens !== undefined && execution.usage.outputTokens > input.policy.maxOutputTokens) {
-        execution = {
-          ...execution,
-          status: "failed",
-          commandProposals: [],
-          failureReason: `Runtime exceeded maxOutputTokens (${execution.usage.outputTokens} > ${input.policy.maxOutputTokens})`,
-        };
-      }
-    } catch (error) {
-      execution = {
-        status: "failed",
-        commandProposals: [],
-        usage: { inputTokens: 0, outputTokens: 0, toolCalls: 0 },
-        traceRefs: [],
-        failureReason: normalizeFailure(error),
-      };
+    }
+
+    const postReasoningHeartbeatFailure = heartbeat.failureReason();
+    if (postReasoningHeartbeatFailure !== undefined) {
+      execution = heartbeatFailureExecution(postReasoningHeartbeatFailure, execution);
     }
 
     const commandOutcomes: RuntimeCommandOutcome[] = [];
     if (execution.status === "succeeded") {
       const allowed = new Set(input.policy.allowedCommandTypes);
       for (const [proposalIndex, proposal] of execution.commandProposals.entries()) {
+        const commandHeartbeatFailure = heartbeat.failureReason();
+        if (commandHeartbeatFailure !== undefined) {
+          execution = heartbeatFailureExecution(commandHeartbeatFailure, execution);
+          break;
+        }
         if (!COMMAND_TYPE_PATTERN.test(proposal.type)) {
           commandOutcomes.push({
             proposalIndex,
@@ -429,22 +528,31 @@ export class RuntimeManager {
       }
     }
 
+    const finalHeartbeatFailure = heartbeat.failureReason();
+    if (finalHeartbeatFailure !== undefined) {
+      execution = heartbeatFailureExecution(finalHeartbeatFailure, execution);
+    }
+
     const traceRefs = traceUnion(prepared.traceRefs, execution.traceRefs);
-    await this.#kernel.recordFinished({
-      organizationId: input.organizationId,
-      runId: input.runId,
-      agentId: input.agent.id,
-      runtimeId: prepared.runtimeId,
-      contextManifestId: context.id,
-      adapter: prepared.adapter,
-      ...(prepared.provider === undefined ? {} : { provider: prepared.provider }),
-      ...(prepared.model === undefined ? {} : { model: prepared.model }),
-      status: execution.status,
-      usage: execution.usage,
-      traceRefs,
-      commandOutcomes,
-      ...(execution.failureReason === undefined ? {} : { failureReason: execution.failureReason }),
-    });
+    try {
+      await this.#kernel.recordFinished({
+        organizationId: input.organizationId,
+        runId: input.runId,
+        agentId: input.agent.id,
+        runtimeId: prepared.runtimeId,
+        contextManifestId: context.id,
+        adapter: prepared.adapter,
+        ...(prepared.provider === undefined ? {} : { provider: prepared.provider }),
+        ...(prepared.model === undefined ? {} : { model: prepared.model }),
+        status: execution.status,
+        usage: execution.usage,
+        traceRefs,
+        commandOutcomes,
+        ...(execution.failureReason === undefined ? {} : { failureReason: execution.failureReason }),
+      });
+    } finally {
+      heartbeat.stop();
+    }
 
     return {
       organizationId: input.organizationId,
