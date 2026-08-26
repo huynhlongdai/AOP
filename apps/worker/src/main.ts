@@ -7,6 +7,7 @@ import {
   LeaseExpireHandler,
   LeaseHeartbeatHandler,
   TaskClaimHandler,
+  TaskCreateHandler,
   TaskRunFinishHandler,
   TaskRunPrepareHandler,
   TaskRunStartHandler,
@@ -99,6 +100,7 @@ async function main(): Promise<void> {
     authorization: new PostgresAuthorizationResolver(clock),
     handlers: [
       new TaskClaimHandler(clock),
+      new TaskCreateHandler(clock),
       new LeaseHeartbeatHandler(clock),
       new LeaseExpireHandler(clock),
       new TaskRunPrepareHandler(),
@@ -133,7 +135,7 @@ async function main(): Promise<void> {
     ? new RuntimeDispatcher(
         new PostgresRuntimeCandidateStore(pool, "runtime.openai", clock),
         new PostgresRuntimeExecutionPolicyResolver(pool, {
-          supportedCommandTypes: ["task.submit_review"],
+          supportedCommandTypes: ["task.create", "task.submit_review"],
           maxOutputTokens: openAIRuntime.maxOutputTokens,
           now: clock,
         }),
