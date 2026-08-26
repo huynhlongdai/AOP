@@ -1,4 +1,4 @@
-import { PostgresContextManifestStore } from "@aop/database";
+import type { PostgresContextManifestStore } from "@aop/database";
 import type { ContextManifestProvider } from "@aop/runtime";
 
 export class PostgresRuntimeContextProvider implements ContextManifestProvider {
