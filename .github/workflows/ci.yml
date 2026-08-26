@@ -138,3 +138,6 @@ jobs:
 
       - name: Validate authoritative Runtime lifecycle against PostgreSQL
         run: pnpm exec vitest run packages/database/src/runtime-lifecycle.integration.test.ts
+
+      - name: Validate Runtime Manager control plane against PostgreSQL
+        run: pnpm exec vitest run apps/worker/src/runtime-manager-control-plane.integration.test.ts
