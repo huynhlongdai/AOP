@@ -112,11 +112,11 @@ async function seed(): Promise<void> {
        owner_agent_id, reviewer_agent_id, priority, state, scope, deliverables,
        acceptance_criteria, required_capabilities, constraints, budget, revision, created_at, updated_at
      ) VALUES ($1,$2,$3,'Decompose engineering work','Create Backend, Frontend and QA Work Contracts',
-       'human',$4,$5,NULL,'critical','leased',
+       'human',$4,$5,NULL,'critical','running',
        '{"includes":["architecture","task decomposition"],"excludes":["production deploy"]}',
        '[{"type":"work.plan","description":"Engineering task graph","required":true}]',
        '["All child tasks have acceptance criteria"]','["task.create"]','{"maxDepth":2}',
-       '{"maxTokens":12000,"maxToolCalls":20}',1,$6,$6)`,
+       '{"maxTokens":12000,"maxToolCalls":20}',2,$6,$6)`,
     [taskId, orgId, goalId, ownerId, agentId, now],
   );
   await pool.query(
@@ -128,9 +128,9 @@ async function seed(): Promise<void> {
   await pool.query(
     `INSERT INTO aop.task_runs (
        id, organization_id, task_id, agent_id, attempt, status, runtime_type,
-       workspace_id, revision
-     ) VALUES ($1,$2,$3,$4,1,'created','runtime.openai','workspace-context-test',0)`,
-    [runId, orgId, taskId, agentId],
+       runtime_id, workspace_id, started_at, heartbeat_at, revision
+     ) VALUES ($1,$2,$3,$4,1,'running','runtime.openai','provider-runtime-context','workspace-context-test',$5,$5,2)`,
+    [runId, orgId, taskId, agentId, now],
   );
 
   await pool.query(
@@ -162,7 +162,7 @@ afterAll(async () => {
 });
 
 describeDb("PostgreSQL Context Manifest compilation", () => {
-  it("persists an exact mandatory manifest from authoritative organization truth", async () => {
+  it("persists an exact mandatory manifest from the running authoritative revision", async () => {
     if (pool === undefined) return;
     const store = new PostgresContextManifestStore(pool, () => now);
     const manifestId = `ctx_${ulid(91)}` as ContextManifestId;
@@ -170,7 +170,7 @@ describeDb("PostgreSQL Context Manifest compilation", () => {
     const manifest = await store.compileInitialManifest({ organizationId: orgId, runId, manifestId, maxTokens: 16_000 });
 
     expect(manifest.id).toBe(manifestId);
-    expect(manifest.taskRevision).toBe(1);
+    expect(manifest.taskRevision).toBe(2);
     expect(manifest.totalTokenEstimate).toBeLessThanOrEqual(12_000);
     expect(manifest.fragments.map((fragment) => fragment.kind)).toEqual([
       "policy",
@@ -192,6 +192,32 @@ describeDb("PostgreSQL Context Manifest compilation", () => {
     expect(persisted.rows[0]?.count).toBe(1);
   });
 
+  it("rejects compilation before the Run and Task reach their authoritative running revisions", async () => {
+    if (pool === undefined) return;
+    await pool.query(
+      `UPDATE aop.task_runs
+          SET status='created', runtime_id=NULL, started_at=NULL, heartbeat_at=NULL, revision=0
+        WHERE organization_id=$1 AND id=$2`,
+      [orgId, runId],
+    );
+    await pool.query(
+      `UPDATE aop.tasks SET state='leased', revision=1, updated_at=$3
+        WHERE organization_id=$1 AND id=$2`,
+      [orgId, taskId, now],
+    );
+
+    const store = new PostgresContextManifestStore(pool, () => now);
+    await expect(
+      store.compileInitialManifest({
+        organizationId: orgId,
+        runId,
+        manifestId: `ctx_${ulid(98)}` as ContextManifestId,
+        maxTokens: 16_000,
+      }),
+    ).rejects.toMatchObject({ code: "invariant_violation" });
+    expect(await store.getForRun(orgId, runId)).toBeUndefined();
+  });
+
   it("serializes concurrent compile attempts into one immutable Manifest", async () => {
     if (pool === undefined) return;
     const store = new PostgresContextManifestStore(pool, () => now);
@@ -211,8 +237,25 @@ describeDb("PostgreSQL Context Manifest compilation", () => {
     ]);
 
     expect(left.id).toBe(right.id);
+    expect(left.taskRevision).toBe(2);
     const persisted = await pool.query("SELECT count(*)::int AS count FROM aop.context_manifests WHERE organization_id=$1 AND run_id=$2", [orgId, runId]);
     expect(persisted.rows[0]?.count).toBe(1);
+  });
+
+  it("rejects reuse when the Task revision changes after Manifest compilation", async () => {
+    if (pool === undefined) return;
+    const store = new PostgresContextManifestStore(pool, () => now);
+    const manifestId = `ctx_${ulid(99)}` as ContextManifestId;
+    await store.compileInitialManifest({ organizationId: orgId, runId, manifestId, maxTokens: 16_000 });
+
+    await pool.query(
+      "UPDATE aop.tasks SET revision=revision+1, updated_at=$3 WHERE organization_id=$1 AND id=$2",
+      [orgId, taskId, later],
+    );
+
+    await expect(
+      store.compileInitialManifest({ organizationId: orgId, runId, manifestId, maxTokens: 16_000 }),
+    ).rejects.toMatchObject({ code: "revision_conflict" });
   });
 
   it("rejects compilation when a required Artifact input becomes stale", async () => {
@@ -297,7 +340,7 @@ describeDb("PostgreSQL Context Manifest compilation", () => {
         `INSERT INTO aop.context_manifests (
            id, organization_id, task_id, run_id, agent_id, task_revision,
            fragments, total_token_estimate, compiled_at, schema_version, protocol_version
-         ) VALUES ($1,$2,$3,$4,$5,1,$6::jsonb,1,$7,1,'0.1.0')`,
+         ) VALUES ($1,$2,$3,$4,$5,2,$6::jsonb,1,$7,1,'0.1.0')`,
         [`ctx_${ulid(97)}`, orgId, taskId, runId, agentId, JSON.stringify([fragment]), now],
       ),
     ).rejects.toMatchObject({ code: "23514" });
