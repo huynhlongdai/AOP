@@ -141,7 +141,7 @@ export class TaskCreateHandler implements CommandHandler {
       throw new DomainError("validation_error", "Child Task ID cannot equal its parent Task ID");
     }
     if (await tx.lockTaskCreateIdentity(command.organizationId, payload.data.taskId)) {
-      throw new DomainError("conflict", "Child Task ID already exists", { taskId: payload.data.taskId });
+      throw new DomainError("invariant_violation", "Child Task ID already exists", { taskId: payload.data.taskId });
     }
 
     const now = this.#now();
