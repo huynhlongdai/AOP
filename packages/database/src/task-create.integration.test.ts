@@ -37,6 +37,8 @@ const parentTaskId = `tsk_${ulid(121)}`;
 const dependencyTaskId = `tsk_${ulid(122)}`;
 const otherDependencyTaskId = `tsk_${ulid(123)}`;
 const childTaskId = `tsk_${ulid(124)}`;
+const parentRunId = `run_${ulid(121)}`;
+const parentLeaseId = `lea_${ulid(121)}`;
 const staleVersionId = `arv_${ulid(121)}`;
 const currentVersionId = `arv_${ulid(122)}`;
 const artifactId = `art_${ulid(121)}`;
@@ -44,6 +46,8 @@ const otherArtifactId = `art_${ulid(122)}`;
 const otherArtifactVersionId = `arv_${ulid(123)}`;
 const now = "2026-08-26T03:50:00.000Z";
 const earlier = "2026-08-26T03:40:00.000Z";
+const leaseExpiry = "2026-08-26T04:00:00.000Z";
+const expiredLeaseExpiry = "2026-08-26T03:45:00.000Z";
 const checksum = (digit: string) => `sha256:${digit.repeat(64)}`;
 
 function ids(): GatewayIds {
@@ -116,7 +120,10 @@ function createCommand(
 
 async function cleanup(): Promise<void> {
   if (pool === undefined) return;
-  await pool.query("DELETE FROM aop.organizations WHERE id = ANY($1::text[])", [[orgId, otherOrgId]]);
+  const organizations = [orgId, otherOrgId];
+  await pool.query("DELETE FROM aop.leases WHERE organization_id = ANY($1::text[])", [organizations]);
+  await pool.query("DELETE FROM aop.task_runs WHERE organization_id = ANY($1::text[])", [organizations]);
+  await pool.query("DELETE FROM aop.organizations WHERE id = ANY($1::text[])", [organizations]);
   await pool.query("DELETE FROM aop.agents WHERE id = ANY($1::text[])", [
     [ctoAgentId, ownerAgentId, reviewerAgentId, outsiderAgentId],
   ]);
@@ -244,6 +251,20 @@ async function seed(): Promise<void> {
       earlier,
       outsiderAgentId,
     ],
+  );
+  await pool.query(
+    `INSERT INTO aop.task_runs (
+       id, organization_id, task_id, agent_id, attempt, status, runtime_type,
+       runtime_id, workspace_id, started_at, heartbeat_at, revision
+     ) VALUES ($1,$2,$3,$4,1,'running','runtime.openai','openai-runtime-t0034','t0034-parent-workspace',$5,$6,2)`,
+    [parentRunId, orgId, parentTaskId, ctoAgentId, earlier, now],
+  );
+  await pool.query(
+    `INSERT INTO aop.leases (
+       id, organization_id, task_id, run_id, agent_id, status, attempt,
+       acquired_at, expires_at, heartbeat_interval_seconds, revision
+     ) VALUES ($1,$2,$3,$4,$5,'active',1,$6,$7,30,0)`,
+    [parentLeaseId, orgId, parentTaskId, parentRunId, ctoAgentId, earlier, leaseExpiry],
   );
 
   await pool.query(
@@ -392,13 +413,29 @@ describeDb("PostgreSQL bounded task.create decomposition", () => {
     expect(Number((await pool.query("SELECT count(*) FROM aop.tasks WHERE id=$1", [childTaskId])).rows[0]?.count)).toBe(0);
   });
 
+  it("rejects a parent Lease that is active in status but already expired", async () => {
+    if (pool === undefined) return;
+    await pool.query(
+      "UPDATE aop.leases SET expires_at=$3 WHERE organization_id=$1 AND id=$2",
+      [orgId, parentLeaseId, expiredLeaseExpiry],
+    );
+
+    const result = await gateway().execute(createCommand(5));
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error.code).toBe("invariant_violation");
+      expect(result.error.message).toContain("expired parent Lease");
+    }
+    expect(Number((await pool.query("SELECT count(*) FROM aop.tasks WHERE id=$1", [childTaskId])).rows[0]?.count)).toBe(0);
+  });
+
   it("rejects cross-Organization dependency and stale parent revision", async () => {
     if (pool === undefined) return;
-    const scopeResult = await gateway().execute(createCommand(5, { dependencyTaskId: otherDependencyTaskId }));
+    const scopeResult = await gateway().execute(createCommand(6, { dependencyTaskId: otherDependencyTaskId }));
     expect(scopeResult.ok).toBe(false);
     if (!scopeResult.ok) expect(scopeResult.error.code).toBe("scope_mismatch");
 
-    const revisionResult = await gateway().execute(createCommand(6, { expectedRevision: 1 }));
+    const revisionResult = await gateway().execute(createCommand(7, { expectedRevision: 1 }));
     expect(revisionResult.ok).toBe(false);
     if (!revisionResult.ok) expect(revisionResult.error.code).toBe("revision_conflict");
     expect(Number((await pool.query("SELECT count(*) FROM aop.tasks WHERE id=$1", [childTaskId])).rows[0]?.count)).toBe(0);
