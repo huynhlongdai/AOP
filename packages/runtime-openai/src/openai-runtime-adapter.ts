@@ -7,7 +7,6 @@ import * as z from "zod";
 import {
   ResourceRefSchema,
   type Agent,
-  type ContextManifest,
   type OrganizationId,
   type ResourceRef,
   type TaskRunId,
@@ -351,7 +350,7 @@ export class OpenAIRuntimeAdapter implements RuntimeAdapter {
         signal: controller.signal,
       });
 
-      if (controller.signal.aborted || local.status === "cancelled") {
+      if (controller.signal.aborted) {
         const failureReason = local.cancelReason ?? "OpenAI runtime cancelled";
         const usage: RuntimeUsage = { inputTokens: 0, outputTokens: 0, toolCalls: 0 };
         local.usage = usage;
@@ -406,7 +405,7 @@ export class OpenAIRuntimeAdapter implements RuntimeAdapter {
       };
     } catch (error) {
       delete local.controller;
-      if (controller.signal.aborted || local.status === "cancelled") {
+      if (controller.signal.aborted) {
         local.status = "cancelled";
         const failureReason = local.cancelReason ?? "OpenAI runtime cancelled";
         const usage: RuntimeUsage = { inputTokens: 0, outputTokens: 0, toolCalls: 0 };
