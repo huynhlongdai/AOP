@@ -128,12 +128,6 @@ export class TaskRunPrepareHandler implements CommandHandler {
         actualAdapter: payload.data.adapter,
       });
     }
-    if (!(await tx.contextManifestMatchesRun(command.organizationId, payload.data.contextManifestId, bundle.run))) {
-      throw new DomainError("invariant_violation", "Context Manifest is not bound to this TaskRun identity", {
-        runId: bundle.run.id,
-        contextManifestId: payload.data.contextManifestId,
-      });
-    }
 
     const prepared = prepareTaskRun(bundle.run, expectedRevision(command), payload.data.runtimeId);
     await tx.persistRuntimePrepared(prepared);
@@ -150,7 +144,6 @@ export class TaskRunPrepareHandler implements CommandHandler {
             taskId: prepared.taskId,
             agentId: prepared.agentId,
             runtimeId: payload.data.runtimeId,
-            contextManifestId: payload.data.contextManifestId,
             adapter: payload.data.adapter,
             provider: payload.data.provider ?? null,
             model: payload.data.model ?? null,
@@ -257,7 +250,10 @@ export class TaskRunFinishHandler implements CommandHandler {
         actualAdapter: payload.data.adapter,
       });
     }
-    if (!(await tx.contextManifestMatchesRun(command.organizationId, payload.data.contextManifestId, bundle.run))) {
+    if (
+      payload.data.contextManifestId !== undefined &&
+      !(await tx.contextManifestMatchesRun(command.organizationId, payload.data.contextManifestId, bundle.run))
+    ) {
       throw new DomainError("invariant_violation", "Runtime finish Context Manifest is not bound to this TaskRun", {
         runId: bundle.run.id,
         contextManifestId: payload.data.contextManifestId,
@@ -306,7 +302,7 @@ export class TaskRunFinishHandler implements CommandHandler {
       runId: run.id,
       agentId: run.agentId,
       attempt: run.attempt,
-      contextManifestId: payload.data.contextManifestId,
+      ...(payload.data.contextManifestId === undefined ? {} : { contextManifestId: payload.data.contextManifestId }),
       runtimeId: run.runtimeId,
       adapter: payload.data.adapter,
       ...(payload.data.provider === undefined ? {} : { provider: payload.data.provider }),
@@ -332,6 +328,7 @@ export class TaskRunFinishHandler implements CommandHandler {
         payload: {
           taskId: run.taskId,
           finishedAt,
+          contextManifestId: payload.data.contextManifestId ?? null,
           usage: payload.data.usage,
           traceRefs: payload.data.traceRefs,
           commandOutcomeCount: payload.data.commandOutcomes.length,
