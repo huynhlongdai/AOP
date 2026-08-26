@@ -4,8 +4,8 @@ BEGIN;
 
 DO $$
 BEGIN
-  IF (SELECT count(*) FROM aop.schema_migrations) <> 13 THEN
-    RAISE EXCEPTION 'expected 13 applied migrations';
+  IF (SELECT count(*) FROM aop.schema_migrations) <> 14 THEN
+    RAISE EXCEPTION 'expected 14 applied migrations';
   END IF;
 END $$;
 
