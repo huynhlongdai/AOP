@@ -39,46 +39,138 @@ INSERT INTO aop.tasks (
   'tsk_00000000000000000000000001', 'org_00000000000000000000000001', 'gol_00000000000000000000000001',
   'Implement auth API', 'Implement bounded authentication', 'human', 'usr_00000000000000000000000001',
   'agt_00000000000000000000000001', 'high', 'ready',
-  '{"includes":["api"],"excludes":[]}',
-  '[{"type":"code","description":"implementation","required":true}]',
+  '{"includes":["auth"],"excludes":[]}', '[{"type":"code","description":"implementation","required":true}]',
   '["tests pass"]', '["backend"]', '{}', '{}', 0, now(), now()
 );
 
--- Cross-organization Goal reference must fail.
 DO $$
 BEGIN
   BEGIN
     INSERT INTO aop.tasks (
       id, organization_id, goal_id, title, objective, created_by_type, created_by_id,
-      priority, state, scope, deliverables, acceptance_criteria,
-      required_capabilities, constraints, budget, revision, created_at, updated_at
+      priority, state, scope, deliverables, acceptance_criteria, required_capabilities,
+      constraints, budget, revision, created_at, updated_at
     ) VALUES (
       'tsk_00000000000000000000000002', 'org_00000000000000000000000001', 'gol_00000000000000000000000002',
-      'Bad task', 'Must fail', 'human', 'usr_00000000000000000000000001',
-      'medium', 'ready', '{"includes":[],"excludes":[]}',
-      '[{"type":"code","description":"bad","required":true}]', '["must fail"]', '[]', '{}', '{}', 0, now(), now()
+      'Invalid cross-org task', 'Must fail', 'human', 'usr_00000000000000000000000001',
+      'medium', 'ready', '{}', '[{"type":"code"}]', '["never persists"]', '[]', '{}', '{}', 0, now(), now()
     );
-    RAISE EXCEPTION 'cross-org Goal FK was not enforced';
-  EXCEPTION WHEN foreign_key_violation THEN
-    NULL;
+    RAISE EXCEPTION 'cross-org goal reference was incorrectly accepted';
+  EXCEPTION WHEN foreign_key_violation THEN NULL;
+  END;
+
+  BEGIN
+    UPDATE aop.tasks
+       SET state = 'completed', completed_at = now(), revision = revision + 1
+     WHERE organization_id = 'org_00000000000000000000000001'
+       AND id = 'tsk_00000000000000000000000001';
+    RAISE EXCEPTION 'task completion without passing review was incorrectly accepted';
+  EXCEPTION WHEN check_violation THEN NULL;
   END;
 END $$;
 
--- Cross-organization owner membership must fail when deferred constraints are checked.
+INSERT INTO aop.task_runs (
+  id, organization_id, task_id, agent_id, attempt, status, runtime_type,
+  workspace_id, revision
+) VALUES (
+  'run_00000000000000000000000001', 'org_00000000000000000000000001',
+  'tsk_00000000000000000000000001', 'agt_00000000000000000000000001', 1,
+  'created', 'runtime.test', 'workspace-1', 0
+);
+
+INSERT INTO aop.leases (
+  id, organization_id, task_id, run_id, agent_id, status, attempt,
+  acquired_at, expires_at, heartbeat_interval_seconds, revision
+) VALUES (
+  'lea_00000000000000000000000001', 'org_00000000000000000000000001',
+  'tsk_00000000000000000000000001', 'run_00000000000000000000000001',
+  'agt_00000000000000000000000001', 'active', 1, now(), now() + interval '5 minutes', 30, 0
+);
+
 DO $$
 BEGIN
   BEGIN
-    SET CONSTRAINTS ALL DEFERRED;
-    UPDATE aop.tasks
-       SET owner_agent_id = 'agt_00000000000000000000000002'
-     WHERE id = 'tsk_00000000000000000000000001';
-    SET CONSTRAINTS ALL IMMEDIATE;
-    RAISE EXCEPTION 'cross-org Task owner FK was not enforced';
-  EXCEPTION WHEN foreign_key_violation THEN
-    UPDATE aop.tasks
-       SET owner_agent_id = 'agt_00000000000000000000000001'
-     WHERE id = 'tsk_00000000000000000000000001';
-    SET CONSTRAINTS ALL IMMEDIATE;
+    INSERT INTO aop.leases (
+      id, organization_id, task_id, run_id, agent_id, status, attempt,
+      acquired_at, expires_at, heartbeat_interval_seconds, revision
+    ) VALUES (
+      'lea_00000000000000000000000002', 'org_00000000000000000000000001',
+      'tsk_00000000000000000000000001', 'run_00000000000000000000000001',
+      'agt_00000000000000000000000001', 'active', 1, now(), now() + interval '5 minutes', 30, 0
+    );
+    RAISE EXCEPTION 'dual active lease was incorrectly accepted';
+  EXCEPTION WHEN unique_violation THEN NULL;
+  END;
+
+  BEGIN
+    INSERT INTO aop.leases (
+      id, organization_id, task_id, run_id, agent_id, status, attempt,
+      acquired_at, expires_at, heartbeat_interval_seconds, revision
+    ) VALUES (
+      'lea_00000000000000000000000003', 'org_00000000000000000000000001',
+      'tsk_00000000000000000000000001', 'run_00000000000000000000000001',
+      'agt_00000000000000000000000001', 'released', 2, now(), now() + interval '5 minutes', 30, 0
+    );
+    RAISE EXCEPTION 'mismatched lease attempt was incorrectly accepted';
+  EXCEPTION WHEN foreign_key_violation THEN NULL;
+  END;
+END $$;
+
+INSERT INTO aop.decisions (
+  id, organization_id, scope, question, options, selected_option_id, rationale,
+  proposed_by_type, proposed_by_id, authority_capability, status,
+  approved_by_type, approved_by_id, effective_at, revision, created_at, updated_at
+) VALUES (
+  'dec_00000000000000000000000001', 'org_00000000000000000000000001',
+  'architecture', 'Which auth mechanism?', '[{"id":"a","label":"Option A"}]',
+  'a', 'Approved rationale', 'human', 'usr_00000000000000000000000001',
+  'decision.architecture.approve', 'active', 'human', 'usr_00000000000000000000000001', now(), 1, now(), now()
+);
+
+UPDATE aop.decisions
+   SET status = 'superseded', revision = revision + 1, updated_at = now()
+ WHERE id = 'dec_00000000000000000000000001';
+
+DO $$
+DECLARE
+  approved_type text;
+  approved_id text;
+  effective timestamptz;
+BEGIN
+  SELECT approved_by_type, approved_by_id, effective_at
+    INTO approved_type, approved_id, effective
+    FROM aop.decisions
+   WHERE id = 'dec_00000000000000000000000001';
+  IF approved_type IS NULL OR approved_id IS NULL OR effective IS NULL THEN
+    RAISE EXCEPTION 'superseded decision lost approval history';
+  END IF;
+END $$;
+
+INSERT INTO aop.reviews (
+  id, organization_id, subject_type, subject_id, reviewer_type, reviewer_id,
+  criteria, evidence, result, findings, created_at, completed_at, revision
+) VALUES (
+  'rev_00000000000000000000000001', 'org_00000000000000000000000001',
+  'task', 'tsk_00000000000000000000000001', 'human', 'usr_00000000000000000000000001',
+  '[{"key":"tests","description":"Tests pass","required":true}]',
+  '[{"type":"task_run","id":"run_00000000000000000000000001"}]',
+  'pass', '[]', now(), now(), 0
+);
+
+DO $$
+BEGIN
+  BEGIN
+    INSERT INTO aop.reviews (
+      id, organization_id, subject_type, subject_id, reviewer_type, reviewer_id,
+      criteria, evidence, result, findings, created_at, completed_at, revision
+    ) VALUES (
+      'rev_00000000000000000000000002', 'org_00000000000000000000000001',
+      'task', 'tsk_00000000000000000000000001', 'human', 'usr_00000000000000000000000001',
+      '[{"key":"tests","description":"Tests pass","required":true}]',
+      '[]', 'pass', '[]', now(), now(), 0
+    );
+    RAISE EXCEPTION 'passing review without evidence was incorrectly accepted';
+  EXCEPTION WHEN check_violation THEN NULL;
   END;
 END $$;
 
