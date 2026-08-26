@@ -14,8 +14,6 @@ import type {
   ReviewId,
   Task,
   TaskId,
-  TaskRun,
-  Lease,
 } from "@aop/protocol";
 
 import { PostgresCommandTransaction } from "./postgres-command-store.js";
@@ -86,37 +84,8 @@ export class PostgresReviewCommandTransaction
     return { lease: mapLease(leaseRow), run: mapTaskRun(runRow) };
   }
 
-  async persistTaskReviewSubmission(task: Task, review: Review, run: TaskRun, lease: Lease): Promise<void> {
+  async persistTaskReviewSubmission(task: Task, review: Review): Promise<void> {
     const previousTaskRevision = task.revision - 1;
-    const previousRunRevision = run.revision - 1;
-    const previousLeaseRevision = lease.revision - 1;
-
-    const runUpdate = await this.#reviewClient.query(
-      `UPDATE aop.task_runs
-          SET status = 'succeeded', finished_at = $3, revision = $4
-        WHERE organization_id = $1 AND id = $2 AND revision = $5
-          AND status IN ('created','preparing','running','paused')`,
-      [run.organizationId, run.id, run.finishedAt ?? null, run.revision, previousRunRevision],
-    );
-    if (runUpdate.rowCount !== 1) {
-      throw new DomainError("revision_conflict", "TaskRun changed before review submission", {
-        runId: run.id,
-        expectedRevision: previousRunRevision,
-      });
-    }
-
-    const leaseUpdate = await this.#reviewClient.query(
-      `UPDATE aop.leases
-          SET status = 'released', revision = $3
-        WHERE organization_id = $1 AND id = $2 AND revision = $4 AND status = 'active'`,
-      [lease.organizationId, lease.id, lease.revision, previousLeaseRevision],
-    );
-    if (leaseUpdate.rowCount !== 1) {
-      throw new DomainError("revision_conflict", "Lease changed before review submission", {
-        leaseId: lease.id,
-        expectedRevision: previousLeaseRevision,
-      });
-    }
 
     const taskUpdate = await this.#reviewClient.query(
       `UPDATE aop.tasks
