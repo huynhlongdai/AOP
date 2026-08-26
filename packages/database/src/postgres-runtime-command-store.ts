@@ -213,7 +213,7 @@ export class PostgresRuntimeCommandTransaction
         report.taskId,
         report.agentId,
         report.attempt,
-        report.contextManifestId,
+        report.contextManifestId ?? null,
         report.runtimeId,
         report.adapter,
         report.provider ?? null,
