@@ -18,7 +18,7 @@ import type {
 } from "@aop/protocol";
 
 import { mapLease, mapTaskRun, type QueryRow } from "./query-mappers.js";
-import { PostgresReviewCommandTransaction } from "./postgres-review-command-store.js";
+import { PostgresTaskCreateCommandTransaction } from "./postgres-task-create-command-store.js";
 
 async function one(client: PoolClient, text: string, values: readonly unknown[] = []): Promise<QueryRow | undefined> {
   const result = await client.query<Record<string, unknown>>(text, [...values]);
@@ -26,7 +26,7 @@ async function one(client: PoolClient, text: string, values: readonly unknown[] 
 }
 
 export class PostgresRuntimeCommandTransaction
-  extends PostgresReviewCommandTransaction
+  extends PostgresTaskCreateCommandTransaction
   implements RuntimeLifecycleTransaction
 {
   readonly #runtimeClient: PoolClient;
@@ -235,7 +235,7 @@ export class PostgresRuntimeCommandTransaction
 
 /**
  * Unified CommandStore for Runtime-enabled Organizations. It preserves review,
- * lease, claim and base command behavior while adding Runtime lifecycle primitives.
+ * decomposition, lease, claim and base command behavior while adding Runtime lifecycle primitives.
  */
 export class PostgresRuntimeCommandStore implements CommandStore {
   readonly #pool: Pool;
