@@ -6,6 +6,8 @@ import type {
   ContextManifestId,
   OrganizationId,
   ResourceRef,
+  RuntimeTraceRef as ProtocolRuntimeTraceRef,
+  RuntimeUsage as ProtocolRuntimeUsage,
   TaskRunId,
 } from "@aop/protocol";
 
@@ -18,18 +20,8 @@ export interface RuntimeExecutionPolicy {
   readonly maxToolCalls?: number;
 }
 
-export interface RuntimeUsage {
-  readonly inputTokens: number;
-  readonly outputTokens: number;
-  readonly toolCalls: number;
-  readonly costCredits?: number;
-}
-
-export interface RuntimeTraceRef {
-  readonly provider: string;
-  readonly traceId: string;
-  readonly spanId?: string;
-}
+export type RuntimeUsage = ProtocolRuntimeUsage;
+export type RuntimeTraceRef = ProtocolRuntimeTraceRef;
 
 export interface RuntimeCommandProposal {
   readonly type: string;
@@ -94,6 +86,14 @@ export interface KernelCommandSubmission {
   readonly proposal: RuntimeCommandProposal;
 }
 
+export interface RuntimeCommandOutcome {
+  readonly proposalIndex: number;
+  readonly proposal: RuntimeCommandProposal;
+  readonly forwarded: boolean;
+  readonly result?: CommandResult;
+  readonly denialReason?: string;
+}
+
 export interface KernelRuntimePort {
   /**
    * Implementations are trusted control-plane adapters. They must persist lifecycle
@@ -128,9 +128,14 @@ export interface KernelRuntimePort {
     readonly runId: TaskRunId;
     readonly agentId: AgentId;
     readonly runtimeId: string;
+    readonly contextManifestId?: ContextManifestId;
+    readonly adapter?: string;
+    readonly provider?: string;
+    readonly model?: string;
     readonly status: "succeeded" | "failed" | "cancelled";
     readonly usage: RuntimeUsage;
     readonly traceRefs: readonly RuntimeTraceRef[];
+    readonly commandOutcomes: readonly RuntimeCommandOutcome[];
     readonly failureReason?: string;
   }): Promise<void>;
   submitAgentCommand(input: KernelCommandSubmission): Promise<CommandResult>;
@@ -145,13 +150,6 @@ export interface ExecuteRuntimeInput {
   readonly policy: RuntimeExecutionPolicy;
 }
 
-export interface RuntimeCommandOutcome {
-  readonly proposal: RuntimeCommandProposal;
-  readonly forwarded: boolean;
-  readonly result?: CommandResult;
-  readonly denialReason?: string;
-}
-
 export interface RuntimeRunReport {
   readonly organizationId: OrganizationId;
   readonly runId: TaskRunId;
@@ -159,6 +157,8 @@ export interface RuntimeRunReport {
   readonly contextManifestId: ContextManifestId;
   readonly runtimeId: string;
   readonly adapter: string;
+  readonly provider?: string;
+  readonly model?: string;
   readonly status: "succeeded" | "failed" | "cancelled";
   readonly startedAt: string;
   readonly finishedAt: string;
@@ -326,11 +326,21 @@ export class RuntimeManager {
       const allowed = new Set(input.policy.allowedCommandTypes);
       for (const [proposalIndex, proposal] of execution.commandProposals.entries()) {
         if (!COMMAND_TYPE_PATTERN.test(proposal.type)) {
-          commandOutcomes.push({ proposal, forwarded: false, denialReason: "invalid_command_type" });
+          commandOutcomes.push({
+            proposalIndex,
+            proposal,
+            forwarded: false,
+            denialReason: "invalid_command_type",
+          });
           continue;
         }
         if (!allowed.has(proposal.type)) {
-          commandOutcomes.push({ proposal, forwarded: false, denialReason: "command_not_allowed_by_execution_policy" });
+          commandOutcomes.push({
+            proposalIndex,
+            proposal,
+            forwarded: false,
+            denialReason: "command_not_allowed_by_execution_policy",
+          });
           continue;
         }
         try {
@@ -341,10 +351,15 @@ export class RuntimeManager {
             proposalIndex,
             proposal,
           });
-          commandOutcomes.push({ proposal, forwarded: true, result });
+          commandOutcomes.push({ proposalIndex, proposal, forwarded: true, result });
         } catch (error) {
           const reason = normalizeFailure(error);
-          commandOutcomes.push({ proposal, forwarded: true, denialReason: `kernel_submission_failed:${reason}` });
+          commandOutcomes.push({
+            proposalIndex,
+            proposal,
+            forwarded: true,
+            denialReason: `kernel_submission_failed:${reason}`,
+          });
           execution = {
             ...execution,
             status: "failed",
@@ -362,9 +377,14 @@ export class RuntimeManager {
       runId: input.runId,
       agentId: input.agent.id,
       runtimeId: prepared.runtimeId,
+      contextManifestId: context.id,
+      adapter: prepared.adapter,
+      ...(prepared.provider === undefined ? {} : { provider: prepared.provider }),
+      ...(prepared.model === undefined ? {} : { model: prepared.model }),
       status: execution.status,
       usage: execution.usage,
       traceRefs,
+      commandOutcomes,
       ...(execution.failureReason === undefined ? {} : { failureReason: execution.failureReason }),
     });
 
@@ -375,6 +395,8 @@ export class RuntimeManager {
       contextManifestId: context.id,
       runtimeId: prepared.runtimeId,
       adapter: prepared.adapter,
+      ...(prepared.provider === undefined ? {} : { provider: prepared.provider }),
+      ...(prepared.model === undefined ? {} : { model: prepared.model }),
       status: execution.status,
       startedAt,
       finishedAt: this.#now(),
@@ -411,6 +433,7 @@ export class RuntimeManager {
       status: "cancelled",
       usage: { inputTokens: 0, outputTokens: 0, toolCalls: 0 },
       traceRefs: [],
+      commandOutcomes: [],
       ...(input.reason === undefined ? {} : { failureReason: input.reason }),
     });
   }
