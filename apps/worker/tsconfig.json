@@ -14,7 +14,9 @@
     { "path": "../../packages/command-bus" },
     { "path": "../../packages/database" },
     { "path": "../../packages/event-bus" },
+    { "path": "../../packages/policy-engine" },
     { "path": "../../packages/runtime" },
+    { "path": "../../packages/runtime-openai" },
     { "path": "../../packages/scheduler" }
   ]
 }
