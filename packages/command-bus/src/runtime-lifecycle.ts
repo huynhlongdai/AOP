@@ -9,6 +9,8 @@ import {
   startTaskRun,
 } from "@aop/domain";
 import {
+  AOP_PROTOCOL_VERSION,
+  RuntimeRunReportSchema,
   TaskRunFinishPayloadSchema,
   TaskRunPreparePayloadSchema,
   TaskRunStartPayloadSchema,
@@ -16,6 +18,7 @@ import {
   type ContextManifestId,
   type Lease,
   type OrganizationId,
+  type RuntimeRunReport,
   type Task,
   type TaskRun,
   type TaskRunId,
@@ -38,7 +41,13 @@ export interface RuntimeLifecycleTransaction extends CommandTransaction {
   ): Promise<boolean>;
   persistRuntimePrepared(run: TaskRun): Promise<void>;
   persistRuntimeStarted(run: TaskRun, task: Task): Promise<void>;
-  persistRuntimeFinished(run: TaskRun, lease: Lease, task: Task, taskRequeued: boolean): Promise<void>;
+  persistRuntimeFinished(
+    run: TaskRun,
+    lease: Lease,
+    task: Task,
+    taskRequeued: boolean,
+    report: RuntimeRunReport,
+  ): Promise<void>;
 }
 
 function runtimeLifecycleTransaction(transaction: CommandTransaction): RuntimeLifecycleTransaction {
@@ -235,6 +244,25 @@ export class TaskRunFinishHandler implements CommandHandler {
         leaseStatus: bundle.lease.status,
       });
     }
+    if (payload.data.runtimeId !== bundle.run.runtimeId) {
+      throw new DomainError("invariant_violation", "Runtime finish identity does not match prepared runtime", {
+        runId: bundle.run.id,
+        expectedRuntimeId: bundle.run.runtimeId ?? null,
+        actualRuntimeId: payload.data.runtimeId,
+      });
+    }
+    if (payload.data.adapter !== bundle.run.runtimeType) {
+      throw new DomainError("invariant_violation", "Runtime finish adapter does not match claimed runtime type", {
+        expectedAdapter: bundle.run.runtimeType,
+        actualAdapter: payload.data.adapter,
+      });
+    }
+    if (!(await tx.contextManifestMatchesRun(command.organizationId, payload.data.contextManifestId, bundle.run))) {
+      throw new DomainError("invariant_violation", "Runtime finish Context Manifest is not bound to this TaskRun", {
+        runId: bundle.run.id,
+        contextManifestId: payload.data.contextManifestId,
+      });
+    }
 
     const finishedAt = this.#now();
     const run = finishTaskRun(
@@ -264,7 +292,36 @@ export class TaskRunFinishHandler implements CommandHandler {
       assertExpectedRevision(task.revision, payload.data.taskExpectedRevision);
     }
 
-    await tx.persistRuntimeFinished(run, lease, task, taskRequeued);
+    if (run.startedAt === undefined || run.finishedAt === undefined || run.runtimeId === undefined) {
+      throw new DomainError("invariant_violation", "Finished TaskRun is missing immutable Runtime report identity", {
+        runId: run.id,
+      });
+    }
+
+    const report = RuntimeRunReportSchema.parse({
+      schemaVersion: 1,
+      protocolVersion: AOP_PROTOCOL_VERSION,
+      organizationId: run.organizationId,
+      taskId: run.taskId,
+      runId: run.id,
+      agentId: run.agentId,
+      attempt: run.attempt,
+      contextManifestId: payload.data.contextManifestId,
+      runtimeId: run.runtimeId,
+      adapter: payload.data.adapter,
+      ...(payload.data.provider === undefined ? {} : { provider: payload.data.provider }),
+      ...(payload.data.model === undefined ? {} : { model: payload.data.model }),
+      status: run.status,
+      usage: payload.data.usage,
+      traceRefs: payload.data.traceRefs,
+      commandOutcomes: payload.data.commandOutcomes,
+      ...(payload.data.failureReason === undefined ? {} : { failureReason: payload.data.failureReason }),
+      startedAt: run.startedAt,
+      finishedAt: run.finishedAt,
+      createdAt: finishedAt,
+    });
+
+    await tx.persistRuntimeFinished(run, lease, task, taskRequeued, report);
 
     const events: CommandMutation["events"] = [
       {
@@ -277,6 +334,8 @@ export class TaskRunFinishHandler implements CommandHandler {
           finishedAt,
           usage: payload.data.usage,
           traceRefs: payload.data.traceRefs,
+          commandOutcomeCount: payload.data.commandOutcomes.length,
+          runReport: { type: "task_run", id: run.id },
           failureReason: payload.data.failureReason ?? null,
         },
       },
