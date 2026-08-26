@@ -26,10 +26,7 @@ import {
   type CommandId,
   type EventId,
 } from "@aop/protocol";
-import {
-  GatewayKernelRuntimePort,
-  RuntimeManager,
-} from "@aop/runtime";
+import { GatewayKernelRuntimePort, RuntimeManager } from "@aop/runtime";
 import {
   OpenAIRuntimeAdapter,
   createOpenAIModelPolicyResolver,
@@ -255,10 +252,10 @@ async function seed(): Promise<void> {
     `INSERT INTO aop.roles (
        id, organization_id, name, purpose, responsibilities, authority, revision, created_at, updated_at
      ) VALUES
-       ($1,$4,'CTO','Decompose engineering goals','["Create bounded child Work Contracts","Submit decomposition for review"]','{"allowedCapabilities":["task.create","task.submit_review"],"approvalRequiredCapabilities":[],"deniedCapabilities":["permission.grant"]}',0,$7,$7),
-       ($2,$4,'Backend Engineer','Implement backend Work Contracts','["Implement backend work"]','{"allowedCapabilities":["task.submit_review"],"approvalRequiredCapabilities":[],"deniedCapabilities":[]}',0,$7,$7),
-       ($3,$4,'QA Reviewer','Review engineering Work Contracts','["Resolve independent QA reviews"]','{"allowedCapabilities":["review.resolve"],"approvalRequiredCapabilities":[],"deniedCapabilities":[]}',0,$7,$7)`,
-    [ctoRoleId, backendRoleId, qaRoleId, orgId, ctoAgentId, backendAgentId, joinedAt],
+       ($1,$4,'CTO','Decompose engineering goals','["Create bounded child Work Contracts","Submit decomposition for review"]','{"allowedCapabilities":["task.create","task.submit_review"],"approvalRequiredCapabilities":[],"deniedCapabilities":["permission.grant"]}',0,$5,$5),
+       ($2,$4,'Backend Engineer','Implement backend Work Contracts','["Implement backend work"]','{"allowedCapabilities":["task.submit_review"],"approvalRequiredCapabilities":[],"deniedCapabilities":[]}',0,$5,$5),
+       ($3,$4,'QA Reviewer','Review engineering Work Contracts','["Resolve independent QA reviews"]','{"allowedCapabilities":["review.resolve"],"approvalRequiredCapabilities":[],"deniedCapabilities":[]}',0,$5,$5)`,
+    [ctoRoleId, backendRoleId, qaRoleId, orgId, joinedAt],
   );
   await pool.query(
     `INSERT INTO aop.role_assignments (organization_id, agent_id, role_id, active_from) VALUES
