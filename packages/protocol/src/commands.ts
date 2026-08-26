@@ -98,7 +98,6 @@ export const TaskClaimPayloadSchema = z
 export const TaskRunPreparePayloadSchema = z
   .object({
     runtimeId: z.string().trim().min(1).max(240),
-    contextManifestId: ContextManifestIdSchema,
     adapter: CapabilityTokenSchema,
     provider: z.string().trim().min(1).max(80).optional(),
     model: z.string().trim().min(1).max(160).optional(),
@@ -115,7 +114,7 @@ export const TaskRunStartPayloadSchema = z
 export const TaskRunFinishPayloadSchema = z
   .object({
     taskExpectedRevision: z.number().int().nonnegative(),
-    contextManifestId: ContextManifestIdSchema,
+    contextManifestId: ContextManifestIdSchema.optional(),
     runtimeId: z.string().trim().min(1).max(240),
     adapter: CapabilityTokenSchema,
     provider: z.string().trim().min(1).max(80).optional(),
@@ -133,6 +132,13 @@ export const TaskRunFinishPayloadSchema = z
     }
     if (payload.status === "succeeded" && payload.failureReason !== undefined) {
       ctx.addIssue({ code: "custom", path: ["failureReason"], message: "succeeded TaskRun cannot include failureReason" });
+    }
+    if (payload.status === "succeeded" && payload.contextManifestId === undefined) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["contextManifestId"],
+        message: "succeeded TaskRun requires exact Context Manifest evidence",
+      });
     }
   });
 
