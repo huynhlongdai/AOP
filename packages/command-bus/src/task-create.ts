@@ -145,10 +145,8 @@ export class TaskCreateHandler implements CommandHandler {
     }
 
     const now = this.#now();
-    const [owner, reviewer] = await Promise.all([
-      tx.getTaskCreateAgentProfile(command.organizationId, payload.data.ownerAgentId, now),
-      tx.getTaskCreateAgentProfile(command.organizationId, payload.data.reviewerAgentId, now),
-    ]);
+    const owner = await tx.getTaskCreateAgentProfile(command.organizationId, payload.data.ownerAgentId, now);
+    const reviewer = await tx.getTaskCreateAgentProfile(command.organizationId, payload.data.reviewerAgentId, now);
     if (owner === undefined || !owner.active || owner.activeRoleCount < 1) {
       throw new DomainError("invariant_violation", "Assigned Task owner is not an active role-bearing Organization member", {
         agentId: payload.data.ownerAgentId,
