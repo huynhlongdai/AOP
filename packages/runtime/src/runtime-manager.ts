@@ -239,6 +239,13 @@ function traceUnion(...groups: readonly (readonly RuntimeTraceRef[])[]): Runtime
   return result;
 }
 
+interface RuntimeTimerHost {
+  setInterval(callback: () => void, intervalMs: number): unknown;
+  clearInterval(handle: unknown): void;
+}
+
+const RUNTIME_TIMER_HOST = globalThis as unknown as RuntimeTimerHost;
+
 interface HeartbeatSupervisor {
   readonly failureReason: () => string | undefined;
   stop(): void;
@@ -256,7 +263,7 @@ function startHeartbeatSupervisor(input: {
   let active = true;
   let inFlight = false;
   let failureReason: string | undefined;
-  const timer = setInterval(() => {
+  const timer = RUNTIME_TIMER_HOST.setInterval(() => {
     if (!active || inFlight || failureReason !== undefined) return;
     inFlight = true;
     void input
@@ -272,13 +279,12 @@ function startHeartbeatSupervisor(input: {
         inFlight = false;
       });
   }, input.intervalMs);
-  timer.unref();
 
   return {
     failureReason: () => failureReason,
     stop: () => {
       active = false;
-      clearInterval(timer);
+      RUNTIME_TIMER_HOST.clearInterval(timer);
     },
   };
 }
