@@ -5,6 +5,7 @@ export * from "./postgres-command-store.js";
 export * from "./postgres-decision-command-store.js";
 export * from "./postgres-review-command-store.js";
 export * from "./postgres-runtime-command-store.js";
+export * from "./postgres-task-create-command-store.js";
 export * from "./query-store.js";
 export * from "./reporting-store.js";
 
