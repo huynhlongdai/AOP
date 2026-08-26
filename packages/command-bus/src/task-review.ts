@@ -120,6 +120,13 @@ export class TaskSubmitReviewHandler implements CommandHandler {
 
     const taskId = targetTaskId(command);
     const tx = taskReviewTransaction(transaction);
+
+    // Keep the global coordination lock order Lease -> Run -> Task. Runtime
+    // finish follows the same order, preventing a submit/finish deadlock.
+    const execution = await tx.lockActiveTaskExecution(command.organizationId, taskId);
+    if (execution === undefined) {
+      throw new DomainError("invariant_violation", "Running Task has no active Run and Lease", { taskId });
+    }
     const task = await tx.lockTask(command.organizationId, taskId);
     if (task === undefined) throw new DomainError("not_found", "Task was not found", { taskId });
 
@@ -139,18 +146,6 @@ export class TaskSubmitReviewHandler implements CommandHandler {
         agentId: task.ownerAgentId,
       });
     }
-
-    const staleInputs = await tx.staleRequiredArtifactInputs(command.organizationId, taskId);
-    if (staleInputs.length > 0) {
-      throw new DomainError("invariant_violation", "Task cannot enter review with stale required Artifact inputs", {
-        staleArtifactVersionIds: [...staleInputs],
-      });
-    }
-
-    const execution = await tx.lockActiveTaskExecution(command.organizationId, taskId);
-    if (execution === undefined) {
-      throw new DomainError("invariant_violation", "Running Task has no active Run and Lease", { taskId });
-    }
     if (execution.run.agentId !== command.actor.id || execution.lease.agentId !== command.actor.id) {
       throw new DomainError("invariant_violation", "Active execution is owned by another Agent", {
         taskId,
@@ -164,6 +159,13 @@ export class TaskSubmitReviewHandler implements CommandHandler {
         taskId,
         runStatus: execution.run.status,
         leaseStatus: execution.lease.status,
+      });
+    }
+
+    const staleInputs = await tx.staleRequiredArtifactInputs(command.organizationId, taskId);
+    if (staleInputs.length > 0) {
+      throw new DomainError("invariant_violation", "Task cannot enter review with stale required Artifact inputs", {
+        staleArtifactVersionIds: [...staleInputs],
       });
     }
 
@@ -244,6 +246,17 @@ export class ReviewResolveHandler implements CommandHandler {
     await assertEvidenceScope(command, transaction, payload.data.evidence);
 
     const taskId = review.subject.id as TaskId;
+    // Review resolution may not race the active Runtime. Lock any active
+    // execution before the Task so the global Lease -> Run -> Task order holds.
+    const activeExecution = await tx.lockActiveTaskExecution(command.organizationId, taskId);
+    if (activeExecution !== undefined) {
+      throw new DomainError("invariant_violation", "Review cannot resolve before Runtime Manager finishes the active execution", {
+        taskId,
+        runId: activeExecution.run.id,
+        leaseId: activeExecution.lease.id,
+      });
+    }
+
     const task = await tx.lockTask(command.organizationId, taskId);
     if (task === undefined) throw new DomainError("not_found", "Reviewed Task was not found", { taskId });
     if (task.reviewerAgentId === undefined || review.reviewer.type !== "agent" || task.reviewerAgentId !== review.reviewer.id) {
@@ -251,15 +264,6 @@ export class ReviewResolveHandler implements CommandHandler {
         taskId,
         taskReviewerAgentId: task.reviewerAgentId ?? null,
         reviewReviewer: review.reviewer,
-      });
-    }
-
-    const activeExecution = await tx.lockActiveTaskExecution(command.organizationId, taskId);
-    if (activeExecution !== undefined) {
-      throw new DomainError("invariant_violation", "Review cannot resolve before Runtime Manager finishes the active execution", {
-        taskId,
-        runId: activeExecution.run.id,
-        leaseId: activeExecution.lease.id,
       });
     }
 
