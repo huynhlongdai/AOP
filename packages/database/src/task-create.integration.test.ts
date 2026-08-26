@@ -384,7 +384,7 @@ describeDb("PostgreSQL bounded task.create decomposition", () => {
 
     await pool.query(
       "UPDATE aop.role_assignments SET active_until=$3 WHERE organization_id=$1 AND agent_id=$2",
-      [orgId, ownerAgentId, earlier],
+      [orgId, ownerAgentId, now],
     );
     const roleResult = await gateway().execute(createCommand(4));
     expect(roleResult.ok).toBe(false);
