@@ -12,7 +12,7 @@ CREATE TABLE aop.task_decompositions (
   CONSTRAINT task_decompositions_not_self CHECK (parent_task_id <> child_task_id),
   CONSTRAINT task_decompositions_parent_fk FOREIGN KEY (organization_id, parent_task_id)
     REFERENCES aop.tasks(organization_id, id)
-    ON DELETE RESTRICT,
+    ON DELETE CASCADE,
   CONSTRAINT task_decompositions_child_fk FOREIGN KEY (organization_id, child_task_id)
     REFERENCES aop.tasks(organization_id, id)
     ON DELETE CASCADE,
