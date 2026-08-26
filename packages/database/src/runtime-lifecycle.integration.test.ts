@@ -37,7 +37,6 @@ const taskId = `tsk_${ulid(91)}`;
 const runId = `run_${ulid(91)}`;
 const leaseId = `lea_${ulid(91)}`;
 const manifestId = `ctx_${ulid(91)}`;
-const missingManifestId = `ctx_${ulid(92)}`;
 const initialTime = "2026-08-25T17:30:00.000Z";
 
 let currentTime = initialTime;
@@ -104,10 +103,9 @@ function claim(): CommandEnvelope {
   });
 }
 
-function prepare(contextManifestId = manifestId, value = 911): CommandEnvelope {
+function prepare(value = 911): CommandEnvelope {
   return command(value, "task_run.prepare", { type: "task_run", id: runId }, 0, {
     runtimeId: "provider-runtime-91",
-    contextManifestId,
     adapter: "runtime.test",
     provider: "test-provider",
     model: "test-model",
@@ -122,27 +120,31 @@ function start(value = 912): CommandEnvelope {
 function finish(
   value: number,
   status: "succeeded" | "failed" | "cancelled",
-  taskExpectedRevision = 2,
+  options: { taskExpectedRevision?: number; withContext?: boolean } = {},
 ): CommandEnvelope {
+  const taskExpectedRevision = options.taskExpectedRevision ?? 2;
+  const withContext = options.withContext ?? true;
   return command(value, "task_run.finish", { type: "task_run", id: runId }, 2, {
     taskExpectedRevision,
-    contextManifestId: manifestId,
+    ...(withContext ? { contextManifestId: manifestId } : {}),
     runtimeId: "provider-runtime-91",
     adapter: "runtime.test",
     provider: "test-provider",
     model: "test-model",
     status,
-    usage: { inputTokens: 100, outputTokens: 20, toolCalls: 1, costCredits: 0.25 },
-    traceRefs: [{ provider: "test-provider", traceId: "run-91" }],
-    commandOutcomes: [
-      {
-        proposalIndex: 0,
-        commandType: "task.create",
-        status: "not_forwarded",
-        reason: "command_not_allowed_by_execution_policy",
-      },
-    ],
-    ...(status === "failed" ? { failureReason: "provider_timeout" } : {}),
+    usage: { inputTokens: withContext ? 100 : 0, outputTokens: withContext ? 20 : 0, toolCalls: withContext ? 1 : 0, costCredits: 0.25 },
+    traceRefs: [{ provider: "test-provider", traceId: withContext ? "run-91" : "prepare-91" }],
+    commandOutcomes: withContext
+      ? [
+          {
+            proposalIndex: 0,
+            commandType: "task.create",
+            status: "not_forwarded",
+            reason: "command_not_allowed_by_execution_policy",
+          },
+        ]
+      : [],
+    ...(status === "failed" ? { failureReason: withContext ? "provider_timeout" : "context_compile_failed" } : {}),
   });
 }
 
@@ -205,10 +207,9 @@ async function seed(): Promise<void> {
   );
 }
 
-async function seedManifest(): Promise<void> {
-  if (pool === undefined) throw new Error("DATABASE_URL missing");
+function manifestFragments() {
   const requiredKinds = ["policy", "identity", "role", "authority", "goal", "task", "output_contract"];
-  const fragments = requiredKinds.map((kind, index) => ({
+  return requiredKinds.map((kind, index) => ({
     key: `${kind}:${index}`,
     kind,
     trust: "authoritative",
@@ -219,12 +220,17 @@ async function seedManifest(): Promise<void> {
     content: JSON.stringify({ kind }),
     digest: `sha256:${String(index + 1).repeat(64).slice(0, 64)}`,
   }));
+}
+
+async function seedManifest(taskRevision = 2): Promise<void> {
+  if (pool === undefined) throw new Error("DATABASE_URL missing");
+  const fragments = manifestFragments();
   await pool.query(
     `INSERT INTO aop.context_manifests (
        id, organization_id, task_id, run_id, agent_id, task_revision,
        schema_version, protocol_version, fragments, total_token_estimate, compiled_at
-     ) VALUES ($1,$2,$3,$4,$5,1,1,'0.1.0',$6::jsonb,$7,$8)`,
-    [manifestId, orgId, taskId, runId, agentId, JSON.stringify(fragments), fragments.length, initialTime],
+     ) VALUES ($1,$2,$3,$4,$5,$6,1,'0.1.0',$7::jsonb,$8,$9)`,
+    [manifestId, orgId, taskId, runId, agentId, taskRevision, JSON.stringify(fragments), fragments.length, currentTime],
   );
 }
 
@@ -240,29 +246,27 @@ afterAll(async () => {
 });
 
 describeDb("PostgreSQL authoritative Runtime lifecycle", () => {
-  it("rejects Runtime preparation when Context Manifest is not bound to the Run", async () => {
+  it("forbids Context before authoritative start while Runtime preparation remains Context-free", async () => {
     if (pool === undefined) return;
     const commandGateway = gateway();
     expect((await commandGateway.execute(claim())).ok).toBe(true);
-    await seedManifest();
 
-    const result = await commandGateway.execute(prepare(missingManifestId));
-    expect(result.ok).toBe(false);
-    if (!result.ok) expect(result.error.code).toBe("invariant_violation");
+    await expect(seedManifest(1)).rejects.toThrow(/running TaskRun/);
+    expect((await commandGateway.execute(prepare())).ok).toBe(true);
 
     const run = await pool.query("SELECT status, runtime_id, revision FROM aop.task_runs WHERE id = $1", [runId]);
-    expect(run.rows[0]).toMatchObject({ status: "created", runtime_id: null, revision: "0" });
+    expect(run.rows[0]).toMatchObject({ status: "preparing", runtime_id: "provider-runtime-91", revision: "1" });
+    expect(Number((await pool.query("SELECT count(*) FROM aop.context_manifests WHERE run_id = $1", [runId])).rows[0]?.count)).toBe(0);
   });
 
-  it("prepares and starts atomically through Runtime Manager authority", async () => {
+  it("starts atomically and accepts an exact Manifest for the running Task revision", async () => {
     if (pool === undefined) return;
     const commandGateway = gateway();
     expect((await commandGateway.execute(claim())).ok).toBe(true);
-    await seedManifest();
-
     expect((await commandGateway.execute(prepare())).ok).toBe(true);
     currentTime = "2026-08-25T17:31:00.000Z";
     expect((await commandGateway.execute(start())).ok).toBe(true);
+    await seedManifest(2);
 
     const run = await pool.query(
       "SELECT status, runtime_id, revision, started_at, heartbeat_at FROM aop.task_runs WHERE id = $1",
@@ -274,15 +278,18 @@ describeDb("PostgreSQL authoritative Runtime lifecycle", () => {
 
     const task = await pool.query("SELECT state, revision, owner_agent_id FROM aop.tasks WHERE id = $1", [taskId]);
     expect(task.rows[0]).toMatchObject({ state: "running", revision: "2", owner_agent_id: agentId });
+    expect((await pool.query("SELECT task_revision FROM aop.context_manifests WHERE run_id = $1", [runId])).rows[0]).toEqual({
+      task_revision: "2",
+    });
   });
 
   it("denies succeeded Run while Task is still running and preserves active execution state", async () => {
     if (pool === undefined) return;
     const commandGateway = gateway();
     expect((await commandGateway.execute(claim())).ok).toBe(true);
-    await seedManifest();
     expect((await commandGateway.execute(prepare())).ok).toBe(true);
     expect((await commandGateway.execute(start())).ok).toBe(true);
+    await seedManifest(2);
 
     currentTime = "2026-08-25T17:32:00.000Z";
     const result = await commandGateway.execute(finish(913, "succeeded"));
@@ -304,21 +311,20 @@ describeDb("PostgreSQL authoritative Runtime lifecycle", () => {
     expect(Number((await pool.query("SELECT count(*) FROM aop.runtime_run_reports WHERE run_id = $1", [runId])).rows[0]?.count)).toBe(0);
   });
 
-  it("atomically fails the Run, releases Lease, requeues Task and persists immutable report", async () => {
+  it("atomically records a pre-context failure, releases Lease, requeues Task and persists immutable report", async () => {
     if (pool === undefined) return;
     const commandGateway = gateway();
     expect((await commandGateway.execute(claim())).ok).toBe(true);
-    await seedManifest();
     expect((await commandGateway.execute(prepare())).ok).toBe(true);
     currentTime = "2026-08-25T17:31:00.000Z";
     expect((await commandGateway.execute(start())).ok).toBe(true);
 
     currentTime = "2026-08-25T17:33:00.000Z";
-    const result = await commandGateway.execute(finish(914, "failed"));
+    const result = await commandGateway.execute(finish(914, "failed", { withContext: false }));
     expect(result.ok).toBe(true);
 
     const run = await pool.query("SELECT status, revision, failure_reason, finished_at FROM aop.task_runs WHERE id = $1", [runId]);
-    expect(run.rows[0]).toMatchObject({ status: "failed", revision: "3", failure_reason: "provider_timeout" });
+    expect(run.rows[0]).toMatchObject({ status: "failed", revision: "3", failure_reason: "context_compile_failed" });
     expect(new Date(run.rows[0]?.finished_at).toISOString()).toBe(currentTime);
 
     expect((await pool.query("SELECT status, revision FROM aop.leases WHERE id = $1", [leaseId])).rows[0]).toMatchObject({
@@ -349,7 +355,7 @@ describeDb("PostgreSQL authoritative Runtime lifecycle", () => {
       runId: reportRow?.run_id,
       agentId: reportRow?.agent_id,
       attempt: Number(reportRow?.attempt),
-      contextManifestId: reportRow?.context_manifest_id,
+      ...(reportRow?.context_manifest_id == null ? {} : { contextManifestId: reportRow.context_manifest_id }),
       runtimeId: reportRow?.runtime_id,
       adapter: reportRow?.adapter,
       provider: reportRow?.provider,
@@ -367,23 +373,16 @@ describeDb("PostgreSQL authoritative Runtime lifecycle", () => {
       runId,
       taskId,
       agentId,
-      contextManifestId: manifestId,
       runtimeId: "provider-runtime-91",
       adapter: "runtime.test",
       provider: "test-provider",
       model: "test-model",
       status: "failed",
-      failureReason: "provider_timeout",
-      usage: { inputTokens: 100, outputTokens: 20, toolCalls: 1, costCredits: 0.25 },
+      failureReason: "context_compile_failed",
+      usage: { inputTokens: 0, outputTokens: 0, toolCalls: 0, costCredits: 0.25 },
     });
-    expect(report.commandOutcomes).toEqual([
-      expect.objectContaining({
-        proposalIndex: 0,
-        commandType: "task.create",
-        status: "not_forwarded",
-        reason: "command_not_allowed_by_execution_policy",
-      }),
-    ]);
+    expect(report.contextManifestId).toBeUndefined();
+    expect(report.commandOutcomes).toEqual([]);
 
     await expect(
       pool.query(
