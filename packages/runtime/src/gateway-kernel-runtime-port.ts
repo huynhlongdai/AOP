@@ -178,9 +178,6 @@ export class GatewayKernelRuntimePort implements KernelRuntimePort {
       throw new Error("Runtime preparation requires created Run, leased Task and active Lease");
     }
     if (state.runtimeType !== input.adapter) throw new Error("Runtime adapter does not match TaskRun runtimeType");
-    if (state.contextManifestId !== undefined && state.contextManifestId !== input.contextManifestId) {
-      throw new Error("Runtime preparation Context Manifest differs from authoritative Run manifest");
-    }
 
     await this.#executeLifecycle({
       type: "task_run.prepare",
@@ -192,7 +189,6 @@ export class GatewayKernelRuntimePort implements KernelRuntimePort {
       targetId: input.runId,
       payload: {
         runtimeId: input.runtimeId,
-        contextManifestId: input.contextManifestId,
         adapter: input.adapter,
         ...(input.provider === undefined ? {} : { provider: input.provider }),
         ...(input.model === undefined ? {} : { model: input.model }),
@@ -249,8 +245,14 @@ export class GatewayKernelRuntimePort implements KernelRuntimePort {
     if (state.runtimeId !== input.runtimeId) throw new Error("Runtime finish runtimeId mismatch");
 
     const contextManifestId = input.contextManifestId ?? state.contextManifestId;
-    if (contextManifestId === undefined) throw new Error("Runtime finish requires authoritative Context Manifest identity");
-    if (state.contextManifestId !== undefined && state.contextManifestId !== contextManifestId) {
+    if (input.status === "succeeded" && contextManifestId === undefined) {
+      throw new Error("Successful Runtime finish requires authoritative Context Manifest identity");
+    }
+    if (
+      contextManifestId !== undefined &&
+      state.contextManifestId !== undefined &&
+      state.contextManifestId !== contextManifestId
+    ) {
       throw new Error("Runtime finish Context Manifest differs from authoritative Run manifest");
     }
     const adapter = input.adapter ?? state.runtimeType;
@@ -270,7 +272,7 @@ export class GatewayKernelRuntimePort implements KernelRuntimePort {
       targetId: input.runId,
       payload: {
         taskExpectedRevision: state.taskRevision,
-        contextManifestId,
+        ...(contextManifestId === undefined ? {} : { contextManifestId }),
         runtimeId: input.runtimeId,
         adapter,
         ...(input.provider === undefined ? {} : { provider: input.provider }),
