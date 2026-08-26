@@ -15,6 +15,7 @@ import {
 } from "@aop/protocol";
 
 import type { CommandHandler, CommandMutation, CommandTransaction } from "./contracts.js";
+import type { ActiveTaskExecution } from "./task-review.js";
 
 export interface TaskCreateAgentProfile {
   readonly active: boolean;
@@ -31,6 +32,10 @@ export interface TaskCreateArtifactResolution {
 }
 
 export interface TaskCreateTransaction extends CommandTransaction {
+  lockActiveTaskExecution(
+    organizationId: OrganizationId,
+    taskId: TaskId,
+  ): Promise<ActiveTaskExecution | undefined>;
   lockTask(organizationId: OrganizationId, taskId: TaskId): Promise<Task | undefined>;
   lockTaskCreateIdentity(organizationId: OrganizationId, taskId: TaskId): Promise<boolean>;
   goalStatus(organizationId: OrganizationId, goalId: Task["goalId"]): Promise<GoalStatus | undefined>;
@@ -50,6 +55,7 @@ export interface TaskCreateTransaction extends CommandTransaction {
 function taskCreateTransaction(transaction: CommandTransaction): TaskCreateTransaction {
   const candidate = transaction as Partial<TaskCreateTransaction>;
   if (
+    typeof candidate.lockActiveTaskExecution !== "function" ||
     typeof candidate.lockTask !== "function" ||
     typeof candidate.lockTaskCreateIdentity !== "function" ||
     typeof candidate.goalStatus !== "function" ||
@@ -106,6 +112,51 @@ export class TaskCreateHandler implements CommandHandler {
 
     const tx = taskCreateTransaction(transaction);
     const parentTaskId = targetParentTaskId(command);
+    const now = this.#now();
+
+    // Preserve the global coordination lock order Lease -> Run -> Task. This
+    // prevents decomposition from racing lease recovery or Runtime finish.
+    const execution = await tx.lockActiveTaskExecution(command.organizationId, parentTaskId);
+    if (execution === undefined) {
+      throw new DomainError("invariant_violation", "Task decomposition requires an active parent execution", {
+        parentTaskId,
+      });
+    }
+    if (
+      execution.run.taskId !== parentTaskId ||
+      execution.lease.taskId !== parentTaskId ||
+      execution.lease.runId !== execution.run.id
+    ) {
+      throw new DomainError("invariant_violation", "Parent execution identity is inconsistent", {
+        parentTaskId,
+        runId: execution.run.id,
+        leaseId: execution.lease.id,
+      });
+    }
+    if (execution.run.status !== "running" || execution.lease.status !== "active") {
+      throw new DomainError("invariant_violation", "Task decomposition requires a running Run and active Lease", {
+        parentTaskId,
+        runStatus: execution.run.status,
+        leaseStatus: execution.lease.status,
+      });
+    }
+    if (Date.parse(execution.lease.expiresAt) <= Date.parse(now)) {
+      throw new DomainError("invariant_violation", "Task decomposition cannot use an expired parent Lease", {
+        parentTaskId,
+        leaseId: execution.lease.id,
+        expiresAt: execution.lease.expiresAt,
+        now,
+      });
+    }
+    if (execution.run.agentId !== command.actor.id || execution.lease.agentId !== command.actor.id) {
+      throw new DomainError("forbidden", "Only the live parent Runtime owner may decompose the Task", {
+        parentTaskId,
+        runAgentId: execution.run.agentId,
+        leaseAgentId: execution.lease.agentId,
+        actorAgentId: command.actor.id,
+      });
+    }
+
     const parent = await tx.lockTask(command.organizationId, parentTaskId);
     if (parent === undefined) throw new DomainError("not_found", "Parent Task was not found", { parentTaskId });
     if (parent.revision !== command.expectedRevision) {
@@ -144,7 +195,6 @@ export class TaskCreateHandler implements CommandHandler {
       throw new DomainError("invariant_violation", "Child Task ID already exists", { taskId: payload.data.taskId });
     }
 
-    const now = this.#now();
     const owner = await tx.getTaskCreateAgentProfile(command.organizationId, payload.data.ownerAgentId, now);
     const reviewer = await tx.getTaskCreateAgentProfile(command.organizationId, payload.data.reviewerAgentId, now);
     if (owner === undefined || !owner.active || owner.activeRoleCount < 1) {
