@@ -135,3 +135,6 @@ jobs:
 
       - name: Validate exact Context Manifest compilation against PostgreSQL
         run: pnpm exec vitest run packages/database/src/context-manifest-store.integration.test.ts
+
+      - name: Validate authoritative Runtime lifecycle against PostgreSQL
+        run: pnpm exec vitest run packages/database/src/runtime-lifecycle.integration.test.ts
