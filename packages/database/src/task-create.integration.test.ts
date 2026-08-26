@@ -168,17 +168,15 @@ async function seed(): Promise<void> {
     `INSERT INTO aop.roles (
        id, organization_id, name, purpose, responsibilities, authority, revision, created_at, updated_at
      ) VALUES
-       ($1,$7,'CTO','Decompose engineering work','["Create bounded Work Contracts"]','{"allowedCapabilities":["task.create"],"approvalRequiredCapabilities":[],"deniedCapabilities":[]}',0,$9,$9),
-       ($2,$7,'Backend','Implement backend','["Implement backend"]','{"allowedCapabilities":["task.submit_review"],"approvalRequiredCapabilities":[],"deniedCapabilities":[]}',0,$9,$9),
-       ($3,$7,'QA','Review backend','["Review work"]','{"allowedCapabilities":["review.resolve"],"approvalRequiredCapabilities":[],"deniedCapabilities":[]}',0,$9,$9),
-       ($4,$8,'Other Role','Other org role','["Implement"]','{"allowedCapabilities":[],"approvalRequiredCapabilities":[],"deniedCapabilities":[]}',0,$9,$9)`,
+       ($1,$5,'CTO','Decompose engineering work','["Create bounded Work Contracts"]','{"allowedCapabilities":["task.create"],"approvalRequiredCapabilities":[],"deniedCapabilities":[]}',0,$7,$7),
+       ($2,$5,'Backend','Implement backend','["Implement backend"]','{"allowedCapabilities":["task.submit_review"],"approvalRequiredCapabilities":[],"deniedCapabilities":[]}',0,$7,$7),
+       ($3,$5,'QA','Review backend','["Review work"]','{"allowedCapabilities":["review.resolve"],"approvalRequiredCapabilities":[],"deniedCapabilities":[]}',0,$7,$7),
+       ($4,$6,'Other Role','Other org role','["Implement"]','{"allowedCapabilities":[],"approvalRequiredCapabilities":[],"deniedCapabilities":[]}',0,$7,$7)`,
     [
       `rol_${ulid(121)}`,
       `rol_${ulid(122)}`,
       `rol_${ulid(123)}`,
       `rol_${ulid(124)}`,
-      ctoAgentId,
-      ownerAgentId,
       orgId,
       otherOrgId,
       earlier,
