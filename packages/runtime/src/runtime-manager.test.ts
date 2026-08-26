@@ -65,13 +65,18 @@ const manifest: ContextManifest = {
 class FakeContext implements ContextManifestProvider {
   readonly value: ContextManifest;
   calls = 0;
+  error: Error | undefined;
+  timeline?: string[];
 
-  constructor(value: ContextManifest = manifest) {
+  constructor(value: ContextManifest = manifest, timeline?: string[]) {
     this.value = value;
+    this.timeline = timeline;
   }
 
   async getOrCompile(): Promise<ContextManifest> {
     this.calls += 1;
+    this.timeline?.push("context.compile");
+    if (this.error !== undefined) throw this.error;
     return this.value;
   }
 }
@@ -84,13 +89,20 @@ class FakeKernel implements KernelRuntimePort {
   submissions: KernelCommandSubmission[] = [];
   preparedError: Error | undefined;
   submissionErrorAtIndex: number | undefined;
+  timeline?: string[];
+
+  constructor(timeline?: string[]) {
+    this.timeline = timeline;
+  }
 
   async recordPrepared(input: Parameters<KernelRuntimePort["recordPrepared"]>[0]): Promise<void> {
     if (this.preparedError !== undefined) throw this.preparedError;
+    this.timeline?.push("kernel.prepared");
     this.prepared.push(input);
   }
 
   async recordRunning(input: Parameters<KernelRuntimePort["recordRunning"]>[0]): Promise<void> {
+    this.timeline?.push("kernel.running");
     this.running.push(input);
   }
 
@@ -99,6 +111,7 @@ class FakeKernel implements KernelRuntimePort {
   }
 
   async recordFinished(input: Parameters<KernelRuntimePort["recordFinished"]>[0]): Promise<void> {
+    this.timeline?.push("kernel.finished");
     this.finished.push(input as unknown as Record<string, unknown>);
   }
 
@@ -119,6 +132,7 @@ class FakeAdapter implements RuntimeAdapter {
     traceRefs: [{ provider: "test", traceId: "prepare-trace" }],
   };
   prepareInputs: unknown[] = [];
+  startInputs: unknown[] = [];
   startCalls = 0;
   cancelled: Array<{ runtimeId: string; reason?: string }> = [];
   result: RuntimeExecutionResult = {
@@ -128,13 +142,21 @@ class FakeAdapter implements RuntimeAdapter {
     traceRefs: [{ provider: "test", traceId: "run-trace" }],
   };
   startError: Error | undefined;
+  timeline?: string[];
+
+  constructor(timeline?: string[]) {
+    this.timeline = timeline;
+  }
 
   async prepare(input: Parameters<RuntimeAdapter["prepare"]>[0]): Promise<PreparedRuntime> {
+    this.timeline?.push("adapter.prepare");
     this.prepareInputs.push(input);
     return this.prepared;
   }
 
-  async start(): Promise<RuntimeExecutionResult> {
+  async start(input: Parameters<RuntimeAdapter["start"]>[0]): Promise<RuntimeExecutionResult> {
+    this.timeline?.push("adapter.start");
+    this.startInputs.push(input);
     this.startCalls += 1;
     if (this.startError !== undefined) throw this.startError;
     return this.result;
@@ -164,10 +186,11 @@ const executeInput = {
 } as const;
 
 describe("Runtime Manager intelligence boundary", () => {
-  it("passes the exact Manifest to the adapter and binds trusted command identity before Kernel submission", async () => {
-    const context = new FakeContext();
-    const kernel = new FakeKernel();
-    const adapter = new FakeAdapter();
+  it("starts Kernel execution before compiling Context and passes exact Manifest only to reasoning", async () => {
+    const timeline: string[] = [];
+    const context = new FakeContext(manifest, timeline);
+    const kernel = new FakeKernel(timeline);
+    const adapter = new FakeAdapter(timeline);
     adapter.result = {
       status: "succeeded",
       commandProposals: [
@@ -181,8 +204,18 @@ describe("Runtime Manager intelligence boundary", () => {
 
     const report = await new RuntimeManager(context, kernel, adapter, () => now).execute(executeInput);
 
-    const prepareInput = adapter.prepareInputs[0] as Parameters<RuntimeAdapter["prepare"]>[0] | undefined;
-    expect(prepareInput?.context).toEqual(manifest);
+    expect(timeline.slice(0, 5)).toEqual([
+      "adapter.prepare",
+      "kernel.prepared",
+      "kernel.running",
+      "context.compile",
+      "adapter.start",
+    ]);
+    const prepareInput = adapter.prepareInputs[0] as Record<string, unknown> | undefined;
+    expect(prepareInput).toBeDefined();
+    expect(prepareInput).not.toHaveProperty("context");
+    const startInput = adapter.startInputs[0] as Parameters<RuntimeAdapter["start"]>[0] | undefined;
+    expect(startInput?.context).toEqual(manifest);
     expect(kernel.submissions).toHaveLength(1);
     expect(kernel.submissions[0]).toEqual({
       organizationId: orgId,
@@ -191,6 +224,7 @@ describe("Runtime Manager intelligence boundary", () => {
       proposalIndex: 0,
       proposal: { type: "task.create", payload: { title: "Backend" } },
     });
+    expect(report.contextManifestId).toBe(manifestId);
     expect(report.commandOutcomes).toHaveLength(2);
     expect(report.commandOutcomes[0]?.forwarded).toBe(true);
     expect(report.commandOutcomes[1]).toMatchObject({
@@ -200,18 +234,45 @@ describe("Runtime Manager intelligence boundary", () => {
     expect(report.status).toBe("succeeded");
   });
 
-  it("rejects mismatched Context identity before a provider runtime is prepared", async () => {
+  it("fails and records a pre-reasoning Run when Context identity is mismatched", async () => {
     const wrongManifest = { ...manifest, runId: `run_${ulid("7")}` as const };
     const context = new FakeContext(wrongManifest);
     const kernel = new FakeKernel();
     const adapter = new FakeAdapter();
 
-    await expect(new RuntimeManager(context, kernel, adapter).execute(executeInput)).rejects.toThrow(/identity/);
-    expect(adapter.prepareInputs).toHaveLength(0);
-    expect(kernel.prepared).toHaveLength(0);
+    const report = await new RuntimeManager(context, kernel, adapter, () => now).execute(executeInput);
+
+    expect(adapter.prepareInputs).toHaveLength(1);
+    expect(kernel.prepared).toHaveLength(1);
+    expect(kernel.running).toHaveLength(1);
+    expect(adapter.startCalls).toBe(0);
+    expect(adapter.cancelled).toEqual([{ runtimeId: "runtime-1", reason: "context_compile_failed" }]);
+    expect(report.status).toBe("failed");
+    expect(report.contextManifestId).toBeUndefined();
+    expect(report.failureReason).toMatch(/Context compilation failed.*identity/);
+    expect(kernel.finished[0]).toMatchObject({
+      status: "failed",
+      failureReason: expect.stringMatching(/Context compilation failed.*identity/),
+    });
+    expect(kernel.finished[0]).not.toHaveProperty("contextManifestId");
   });
 
-  it("normalizes adapter exceptions into a failed Run report", async () => {
+  it("normalizes Context provider failures into an immutable pre-reasoning failure", async () => {
+    const context = new FakeContext();
+    context.error = new Error("context store unavailable");
+    const kernel = new FakeKernel();
+    const adapter = new FakeAdapter();
+
+    const report = await new RuntimeManager(context, kernel, adapter, () => now).execute(executeInput);
+
+    expect(report.status).toBe("failed");
+    expect(report.contextManifestId).toBeUndefined();
+    expect(report.failureReason).toBe("Context compilation failed: context store unavailable");
+    expect(adapter.startCalls).toBe(0);
+    expect(kernel.finished[0]).not.toHaveProperty("contextManifestId");
+  });
+
+  it("normalizes adapter exceptions into a failed Run report with Context evidence", async () => {
     const context = new FakeContext();
     const kernel = new FakeKernel();
     const adapter = new FakeAdapter();
@@ -220,9 +281,14 @@ describe("Runtime Manager intelligence boundary", () => {
     const report = await new RuntimeManager(context, kernel, adapter, () => now).execute(executeInput);
 
     expect(report.status).toBe("failed");
+    expect(report.contextManifestId).toBe(manifestId);
     expect(report.failureReason).toBe("provider timeout");
     expect(report.commandOutcomes).toEqual([]);
-    expect(kernel.finished[0]).toMatchObject({ status: "failed", failureReason: "provider timeout" });
+    expect(kernel.finished[0]).toMatchObject({
+      status: "failed",
+      contextManifestId: manifestId,
+      failureReason: "provider timeout",
+    });
   });
 
   it("fails closed when provider-reported usage exceeds the execution policy", async () => {
@@ -268,7 +334,7 @@ describe("Runtime Manager intelligence boundary", () => {
       forwarded: true,
       denialReason: "kernel_submission_failed:gateway unavailable",
     });
-    expect(kernel.finished[0]).toMatchObject({ status: "failed" });
+    expect(kernel.finished[0]).toMatchObject({ status: "failed", contextManifestId: manifestId });
   });
 
   it("cancels a prepared provider runtime when trusted lifecycle persistence fails", async () => {
@@ -281,6 +347,7 @@ describe("Runtime Manager intelligence boundary", () => {
       "control plane unavailable",
     );
 
+    expect(context.calls).toBe(0);
     expect(adapter.startCalls).toBe(0);
     expect(adapter.cancelled).toEqual([{ runtimeId: "runtime-1", reason: "kernel_lifecycle_record_failed" }]);
   });
