@@ -13,6 +13,7 @@ import {
 import {
   AOP_PROTOCOL_VERSION,
   CommandEnvelopeSchema,
+  RuntimeRunReportSchema,
   type ApprovalRequestId,
   type CommandEnvelope,
   type CommandId,
@@ -125,9 +126,22 @@ function finish(
 ): CommandEnvelope {
   return command(value, "task_run.finish", { type: "task_run", id: runId }, 2, {
     taskExpectedRevision,
+    contextManifestId: manifestId,
+    runtimeId: "provider-runtime-91",
+    adapter: "runtime.test",
+    provider: "test-provider",
+    model: "test-model",
     status,
     usage: { inputTokens: 100, outputTokens: 20, toolCalls: 1, costCredits: 0.25 },
     traceRefs: [{ provider: "test-provider", traceId: "run-91" }],
+    commandOutcomes: [
+      {
+        proposalIndex: 0,
+        commandType: "task.create",
+        status: "not_forwarded",
+        reason: "command_not_allowed_by_execution_policy",
+      },
+    ],
     ...(status === "failed" ? { failureReason: "provider_timeout" } : {}),
   });
 }
@@ -287,14 +301,16 @@ describeDb("PostgreSQL authoritative Runtime lifecycle", () => {
       state: "running",
       revision: "2",
     });
+    expect(Number((await pool.query("SELECT count(*) FROM aop.runtime_run_reports WHERE run_id = $1", [runId])).rows[0]?.count)).toBe(0);
   });
 
-  it("atomically fails the Run, releases Lease and requeues executing Task", async () => {
+  it("atomically fails the Run, releases Lease, requeues Task and persists immutable report", async () => {
     if (pool === undefined) return;
     const commandGateway = gateway();
     expect((await commandGateway.execute(claim())).ok).toBe(true);
     await seedManifest();
     expect((await commandGateway.execute(prepare())).ok).toBe(true);
+    currentTime = "2026-08-25T17:31:00.000Z";
     expect((await commandGateway.execute(start())).ok).toBe(true);
 
     currentTime = "2026-08-25T17:33:00.000Z";
@@ -314,6 +330,67 @@ describeDb("PostgreSQL authoritative Runtime lifecycle", () => {
       owner_agent_id: null,
       revision: "3",
     });
+
+    const reportRow = (
+      await pool.query(
+        `SELECT organization_id, run_id, task_id, agent_id, attempt, context_manifest_id,
+                runtime_id, adapter, provider, model, status, usage, trace_refs, command_outcomes,
+                failure_reason, started_at, finished_at, created_at, schema_version, protocol_version
+           FROM aop.runtime_run_reports
+          WHERE organization_id = $1 AND run_id = $2`,
+        [orgId, runId],
+      )
+    ).rows[0];
+    const report = RuntimeRunReportSchema.parse({
+      schemaVersion: Number(reportRow?.schema_version),
+      protocolVersion: reportRow?.protocol_version,
+      organizationId: reportRow?.organization_id,
+      taskId: reportRow?.task_id,
+      runId: reportRow?.run_id,
+      agentId: reportRow?.agent_id,
+      attempt: Number(reportRow?.attempt),
+      contextManifestId: reportRow?.context_manifest_id,
+      runtimeId: reportRow?.runtime_id,
+      adapter: reportRow?.adapter,
+      provider: reportRow?.provider,
+      model: reportRow?.model,
+      status: reportRow?.status,
+      usage: reportRow?.usage,
+      traceRefs: reportRow?.trace_refs,
+      commandOutcomes: reportRow?.command_outcomes,
+      failureReason: reportRow?.failure_reason,
+      startedAt: new Date(reportRow?.started_at).toISOString(),
+      finishedAt: new Date(reportRow?.finished_at).toISOString(),
+      createdAt: new Date(reportRow?.created_at).toISOString(),
+    });
+    expect(report).toMatchObject({
+      runId,
+      taskId,
+      agentId,
+      contextManifestId: manifestId,
+      runtimeId: "provider-runtime-91",
+      adapter: "runtime.test",
+      provider: "test-provider",
+      model: "test-model",
+      status: "failed",
+      failureReason: "provider_timeout",
+      usage: { inputTokens: 100, outputTokens: 20, toolCalls: 1, costCredits: 0.25 },
+    });
+    expect(report.commandOutcomes).toEqual([
+      expect.objectContaining({
+        proposalIndex: 0,
+        commandType: "task.create",
+        status: "not_forwarded",
+        reason: "command_not_allowed_by_execution_policy",
+      }),
+    ]);
+
+    await expect(
+      pool.query(
+        "UPDATE aop.runtime_run_reports SET status = 'cancelled' WHERE organization_id = $1 AND run_id = $2",
+        [orgId, runId],
+      ),
+    ).rejects.toThrow(/immutable/);
 
     expect(Number((await pool.query("SELECT count(*) FROM aop.events WHERE organization_id = $1", [orgId])).rows[0]?.count)).toBe(9);
     expect(Number((await pool.query("SELECT count(*) FROM aop.outbox_events WHERE organization_id = $1", [orgId])).rows[0]?.count)).toBe(9);
