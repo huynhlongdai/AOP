@@ -378,7 +378,7 @@ describeDb("PostgreSQL bounded task.create decomposition", () => {
 
   it("rejects owner capability or active Role gaps before persisting the child", async () => {
     if (pool === undefined) return;
-    const capabilityResult = await gateway().execute(createCommand(3, { ownerAgentId: reviewerAgentId }));
+    const capabilityResult = await gateway().execute(createCommand(3, { ownerAgentId: ctoAgentId }));
     expect(capabilityResult.ok).toBe(false);
     if (!capabilityResult.ok) expect(capabilityResult.error.code).toBe("invariant_violation");
 
