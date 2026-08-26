@@ -7,10 +7,13 @@ import {
   LeaseExpireHandler,
   LeaseHeartbeatHandler,
   TaskClaimHandler,
+  TaskRunFinishHandler,
+  TaskRunPrepareHandler,
+  TaskRunStartHandler,
   semanticCommandDigest,
   type GatewayIds,
 } from "@aop/command-bus";
-import { PostgresAuthorizationResolver, PostgresCommandStore } from "@aop/database";
+import { PostgresAuthorizationResolver, PostgresRuntimeCommandStore } from "@aop/database";
 import {
   OutboxWorker,
   PostgresNotifyPublisher,
@@ -66,9 +69,16 @@ async function main(): Promise<void> {
   });
 
   const commandGateway = new CommandGateway({
-    store: new PostgresCommandStore(pool),
+    store: new PostgresRuntimeCommandStore(pool),
     authorization: new PostgresAuthorizationResolver(clock),
-    handlers: [new TaskClaimHandler(clock), new LeaseHeartbeatHandler(clock), new LeaseExpireHandler(clock)],
+    handlers: [
+      new TaskClaimHandler(clock),
+      new LeaseHeartbeatHandler(clock),
+      new LeaseExpireHandler(clock),
+      new TaskRunPrepareHandler(),
+      new TaskRunStartHandler(clock),
+      new TaskRunFinishHandler(clock),
+    ],
     ids: gatewayIds(clock),
     digest: semanticCommandDigest,
     now: clock,
