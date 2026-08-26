@@ -8,6 +8,7 @@ export * from "./query.js";
 export * from "./reporting.js";
 export * from "./resource-ref.js";
 export * from "./runtime-report.js";
+export * from "./task-create-command.js";
 export * from "./truth.js";
 export * from "./validation.js";
 export * from "./version.js";
