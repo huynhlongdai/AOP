@@ -207,9 +207,9 @@ async function seed(): Promise<void> {
   await pool.query(
     `INSERT INTO aop.task_runs (
        id, organization_id, task_id, agent_id, attempt, status, runtime_type,
-       workspace_id, revision
-     ) VALUES ($1,$2,$3,$4,1,'created','runtime.test','workspace-review',0)`,
-    [runId, orgId, taskId, ownerAgentId],
+       runtime_id, workspace_id, started_at, heartbeat_at, revision
+     ) VALUES ($1,$2,$3,$4,1,'running','runtime.test','runtime-review','workspace-review',$5,$5,0)`,
+    [runId, orgId, taskId, ownerAgentId, now],
   );
   const fragments = manifestFragments();
   await pool.query(
@@ -218,12 +218,6 @@ async function seed(): Promise<void> {
        schema_version, protocol_version, fragments, total_token_estimate, compiled_at
      ) VALUES ($1,$2,$3,$4,$5,0,1,'0.1.0',$6::jsonb,$7,$8)`,
     [manifestId, orgId, taskId, runId, ownerAgentId, JSON.stringify(fragments), fragments.length, now],
-  );
-  await pool.query(
-    `UPDATE aop.task_runs
-        SET status = 'running', runtime_id = 'runtime-review', started_at = $2, heartbeat_at = $2
-      WHERE id = $1`,
-    [runId, now],
   );
   await pool.query(
     `INSERT INTO aop.leases (
