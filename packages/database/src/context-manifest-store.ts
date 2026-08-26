@@ -69,6 +69,41 @@ function contextManifestFromRow(row: QueryRow): ContextManifest {
   });
 }
 
+async function assertManifestMatchesCurrentExecution(
+  client: PoolClient,
+  organizationId: OrganizationId,
+  runId: TaskRunId,
+  manifest: ContextManifest,
+): Promise<void> {
+  const executionRow = await one(
+    client,
+    `SELECT run.status AS run_status, task.revision AS task_revision
+       FROM aop.task_runs run
+       JOIN aop.tasks task
+         ON task.organization_id = run.organization_id
+        AND task.id = run.task_id
+      WHERE run.organization_id = $1 AND run.id = $2`,
+    [organizationId, runId],
+  );
+  if (executionRow === undefined) {
+    throw new DomainError("not_found", "TaskRun was not found", { runId });
+  }
+  if (String(executionRow.run_status) !== "running") {
+    throw new DomainError("invariant_violation", "Existing Context Manifest is not bound to a running execution", {
+      runId,
+      runStatus: String(executionRow.run_status),
+    });
+  }
+  const currentTaskRevision = Number(executionRow.task_revision);
+  if (manifest.taskRevision !== currentTaskRevision) {
+    throw new DomainError("revision_conflict", "Existing Context Manifest is stale for the current Task revision", {
+      runId,
+      manifestTaskRevision: manifest.taskRevision,
+      currentTaskRevision,
+    });
+  }
+}
+
 function inputFromStatusRow(row: QueryRow): TaskArtifactInput {
   const invalidatedByVersionId =
     row.invalidated_by_version_id === null || row.invalidated_by_version_id === undefined
@@ -188,6 +223,7 @@ export class PostgresContextManifestStore {
       );
       if (existingRow !== undefined) {
         const existing = contextManifestFromRow(existingRow);
+        await assertManifestMatchesCurrentExecution(client, input.organizationId, input.runId, existing);
         await client.query("COMMIT");
         return existing;
       }
@@ -203,8 +239,8 @@ export class PostgresContextManifestStore {
       );
       if (runRow === undefined) throw new DomainError("not_found", "TaskRun was not found", { runId: input.runId });
       const run = mapTaskRun(runRow);
-      if (run.status !== "created" && run.status !== "preparing") {
-        throw new DomainError("invariant_violation", "Context may only be compiled before TaskRun execution", {
+      if (run.status !== "running") {
+        throw new DomainError("invariant_violation", "Context may only be compiled for a running TaskRun", {
           runId: run.id,
           status: run.status,
         });
@@ -239,6 +275,12 @@ export class PostgresContextManifestStore {
           taskId: task.id,
           runAgentId: run.agentId,
           taskOwnerAgentId: task.ownerAgentId ?? null,
+        });
+      }
+      if (task.state !== "running") {
+        throw new DomainError("invariant_violation", "Context requires the Task running revision", {
+          taskId: task.id,
+          taskState: task.state,
         });
       }
 
