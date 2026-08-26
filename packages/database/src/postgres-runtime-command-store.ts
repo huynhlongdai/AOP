@@ -11,6 +11,7 @@ import type {
   ContextManifestId,
   Lease,
   OrganizationId,
+  RuntimeRunReport,
   Task,
   TaskRun,
   TaskRunId,
@@ -136,7 +137,13 @@ export class PostgresRuntimeCommandTransaction
     }
   }
 
-  async persistRuntimeFinished(run: TaskRun, lease: Lease, task: Task, taskRequeued: boolean): Promise<void> {
+  async persistRuntimeFinished(
+    run: TaskRun,
+    lease: Lease,
+    task: Task,
+    taskRequeued: boolean,
+    report: RuntimeRunReport,
+  ): Promise<void> {
     const leasePreviousRevision = lease.revision - 1;
     const runPreviousRevision = run.revision - 1;
 
@@ -193,6 +200,36 @@ export class PostgresRuntimeCommandTransaction
         });
       }
     }
+
+    await this.#runtimeClient.query(
+      `INSERT INTO aop.runtime_run_reports (
+         organization_id, run_id, task_id, agent_id, attempt, context_manifest_id,
+         runtime_id, adapter, provider, model, status, usage, trace_refs, command_outcomes,
+         failure_reason, started_at, finished_at, created_at, schema_version, protocol_version
+       ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12::jsonb,$13::jsonb,$14::jsonb,$15,$16,$17,$18,$19,$20)`,
+      [
+        report.organizationId,
+        report.runId,
+        report.taskId,
+        report.agentId,
+        report.attempt,
+        report.contextManifestId,
+        report.runtimeId,
+        report.adapter,
+        report.provider ?? null,
+        report.model ?? null,
+        report.status,
+        JSON.stringify(report.usage),
+        JSON.stringify(report.traceRefs),
+        JSON.stringify(report.commandOutcomes),
+        report.failureReason ?? null,
+        report.startedAt,
+        report.finishedAt,
+        report.createdAt,
+        report.schemaVersion,
+        report.protocolVersion,
+      ],
+    );
   }
 }
 
