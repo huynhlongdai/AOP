@@ -144,3 +144,6 @@ jobs:
 
       - name: Validate Runtime Manager control plane against PostgreSQL
         run: pnpm exec vitest run apps/worker/src/runtime-manager-control-plane.integration.test.ts
+
+      - name: Validate CTO OpenAI decomposition control plane against PostgreSQL
+        run: pnpm exec vitest run apps/worker/src/cto-openai-decomposition.integration.test.ts
