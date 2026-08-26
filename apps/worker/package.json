@@ -19,6 +19,8 @@
     "@aop/command-bus": "workspace:*",
     "@aop/database": "workspace:*",
     "@aop/event-bus": "workspace:*",
+    "@aop/protocol": "workspace:*",
+    "@aop/runtime": "workspace:*",
     "@aop/scheduler": "workspace:*",
     "pg": "^8.23.0"
   },
