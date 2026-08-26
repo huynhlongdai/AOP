@@ -15,6 +15,7 @@ export default defineConfig({
       "@aop/policy-engine": source("./packages/policy-engine/src/index.ts"),
       "@aop/protocol": source("./packages/protocol/src/index.ts"),
       "@aop/runtime": source("./packages/runtime/src/index.ts"),
+      "@aop/runtime-openai": source("./packages/runtime-openai/src/index.ts"),
       "@aop/scheduler": source("./packages/scheduler/src/index.ts"),
     },
   },
