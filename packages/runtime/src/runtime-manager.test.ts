@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { Agent, CommandResult, ContextManifest } from "@aop/protocol";
 
@@ -88,6 +88,7 @@ class FakeKernel implements KernelRuntimePort {
   finished: Array<Record<string, unknown>> = [];
   submissions: KernelCommandSubmission[] = [];
   preparedError: Error | undefined;
+  heartbeatError: Error | undefined;
   submissionErrorAtIndex: number | undefined;
   timeline?: string[];
 
@@ -108,6 +109,7 @@ class FakeKernel implements KernelRuntimePort {
 
   async heartbeat(input: Parameters<KernelRuntimePort["heartbeat"]>[0]): Promise<void> {
     this.heartbeats.push(input);
+    if (this.heartbeatError !== undefined) throw this.heartbeatError;
   }
 
   async recordFinished(input: Parameters<KernelRuntimePort["recordFinished"]>[0]): Promise<void> {
@@ -142,6 +144,7 @@ class FakeAdapter implements RuntimeAdapter {
     traceRefs: [{ provider: "test", traceId: "run-trace" }],
   };
   startError: Error | undefined;
+  startGate: Promise<void> | undefined;
   timeline?: string[];
 
   constructor(timeline?: string[]) {
@@ -158,6 +161,7 @@ class FakeAdapter implements RuntimeAdapter {
     this.timeline?.push("adapter.start");
     this.startInputs.push(input);
     this.startCalls += 1;
+    if (this.startGate !== undefined) await this.startGate;
     if (this.startError !== undefined) throw this.startError;
     return this.result;
   }
@@ -184,6 +188,10 @@ const executeInput = {
     maxToolCalls: 4,
   },
 } as const;
+
+afterEach(() => {
+  vi.useRealTimers();
+});
 
 describe("Runtime Manager intelligence boundary", () => {
   it("starts Kernel execution before compiling Context and passes exact Manifest only to reasoning", async () => {
@@ -335,6 +343,46 @@ describe("Runtime Manager intelligence boundary", () => {
       denialReason: "kernel_submission_failed:gateway unavailable",
     });
     expect(kernel.finished[0]).toMatchObject({ status: "failed", contextManifestId: manifestId });
+  });
+
+  it("cancels provider reasoning and fails closed when the authoritative Lease heartbeat is rejected", async () => {
+    vi.useFakeTimers();
+    const context = new FakeContext();
+    const kernel = new FakeKernel();
+    kernel.heartbeatError = new Error("lease ownership lost");
+    const adapter = new FakeAdapter();
+    adapter.result = {
+      status: "succeeded",
+      commandProposals: [{ type: "task.create", payload: { title: "Must not forward" } }],
+      usage: { inputTokens: 20, outputTokens: 10, toolCalls: 0 },
+      traceRefs: [{ provider: "test", traceId: "reasoning-before-lease-loss" }],
+    };
+    let releaseStart: (() => void) | undefined;
+    adapter.startGate = new Promise<void>((resolve) => {
+      releaseStart = resolve;
+    });
+
+    const execution = new RuntimeManager(context, kernel, adapter, () => now).execute({
+      ...executeInput,
+      heartbeatIntervalMs: 10,
+    });
+    await Promise.resolve();
+    await Promise.resolve();
+    await vi.advanceTimersByTimeAsync(10);
+
+    expect(kernel.heartbeats).toHaveLength(1);
+    expect(adapter.cancelled).toContainEqual({ runtimeId: "runtime-1", reason: "lease_heartbeat_failed" });
+    releaseStart?.();
+    const report = await execution;
+
+    expect(report.status).toBe("failed");
+    expect(report.failureReason).toBe("Lease heartbeat failed: lease ownership lost");
+    expect(kernel.submissions).toHaveLength(0);
+    expect(kernel.finished[0]).toMatchObject({
+      status: "failed",
+      contextManifestId: manifestId,
+      failureReason: "Lease heartbeat failed: lease ownership lost",
+    });
   });
 
   it("cancels a prepared provider runtime when trusted lifecycle persistence fails", async () => {
