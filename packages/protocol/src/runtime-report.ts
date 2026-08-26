@@ -75,7 +75,7 @@ export const RuntimeRunReportSchema = z
     runId: TaskRunIdSchema,
     agentId: AgentIdSchema,
     attempt: z.number().int().positive(),
-    contextManifestId: ContextManifestIdSchema,
+    contextManifestId: ContextManifestIdSchema.optional(),
     runtimeId: z.string().trim().min(1).max(240),
     adapter: CapabilityTokenSchema,
     provider: z.string().trim().min(1).max(80).optional(),
@@ -102,6 +102,13 @@ export const RuntimeRunReportSchema = z
     }
     if (report.status === "succeeded" && report.failureReason !== undefined) {
       ctx.addIssue({ code: "custom", path: ["failureReason"], message: "succeeded Run Report cannot include failureReason" });
+    }
+    if (report.status === "succeeded" && report.contextManifestId === undefined) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["contextManifestId"],
+        message: "succeeded Run Report requires exact Context Manifest evidence",
+      });
     }
     const indexes = report.commandOutcomes.map((outcome) => outcome.proposalIndex);
     if (new Set(indexes).size !== indexes.length) {
