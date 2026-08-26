@@ -7,16 +7,28 @@ import {
   LeaseExpireHandler,
   LeaseHeartbeatHandler,
   TaskClaimHandler,
+  TaskCreateHandler,
+  TaskRunFinishHandler,
+  TaskRunPrepareHandler,
+  TaskRunStartHandler,
+  TaskSubmitReviewHandler,
   semanticCommandDigest,
   type GatewayIds,
 } from "@aop/command-bus";
-import { PostgresAuthorizationResolver, PostgresCommandStore } from "@aop/database";
+import {
+  PostgresAuthorizationResolver,
+  PostgresContextManifestStore,
+  PostgresRuntimeCommandStore,
+} from "@aop/database";
 import {
   OutboxWorker,
   PostgresNotifyPublisher,
   PostgresOutboxStore,
   runOutboxLoop,
 } from "@aop/event-bus";
+import type { CommandId } from "@aop/protocol";
+import { GatewayKernelRuntimePort, RuntimeManager } from "@aop/runtime";
+import { OpenAIRuntimeAdapter, createOpenAIModelPolicyResolver } from "@aop/runtime-openai";
 import {
   DeterministicLeaseReaper,
   DeterministicScheduler,
@@ -26,6 +38,17 @@ import {
   runLeaseReaperLoop,
   runSchedulerLoop,
 } from "@aop/scheduler";
+
+import { readOpenAIRuntimeWorkerConfig } from "./openai-runtime-config.js";
+import { PostgresRuntimeContextProvider } from "./runtime-context-provider.js";
+import { PostgresRuntimeExecutionStateReader } from "./runtime-control-state.js";
+import {
+  DeterministicRuntimeManifestIdSource,
+  PostgresRuntimeCandidateStore,
+  PostgresRuntimeExecutionPolicyResolver,
+  RuntimeDispatcher,
+  runRuntimeDispatcherLoop,
+} from "./runtime-dispatcher.js";
 
 function positiveInteger(name: string, value: string | undefined, fallback: number): number {
   if (value === undefined) return fallback;
@@ -48,9 +71,16 @@ function gatewayIds(now: () => string): GatewayIds {
   };
 }
 
+function runtimeCommandIds(now: () => string) {
+  return {
+    nextCommandId: () => deterministicPrefixedUlid("cmd", now(), randomUUID()) as CommandId,
+  };
+}
+
 async function main(): Promise<void> {
   const databaseUrl = process.env.DATABASE_URL;
   if (databaseUrl === undefined || databaseUrl.length === 0) throw new Error("DATABASE_URL is required");
+  const openAIRuntime = readOpenAIRuntimeWorkerConfig(process.env);
 
   const pool = new Pool({ connectionString: databaseUrl });
   const clock = () => new Date().toISOString();
@@ -66,9 +96,18 @@ async function main(): Promise<void> {
   });
 
   const commandGateway = new CommandGateway({
-    store: new PostgresCommandStore(pool),
+    store: new PostgresRuntimeCommandStore(pool),
     authorization: new PostgresAuthorizationResolver(clock),
-    handlers: [new TaskClaimHandler(clock), new LeaseHeartbeatHandler(clock), new LeaseExpireHandler(clock)],
+    handlers: [
+      new TaskClaimHandler(clock),
+      new TaskCreateHandler(clock),
+      new LeaseHeartbeatHandler(clock),
+      new LeaseExpireHandler(clock),
+      new TaskRunPrepareHandler(),
+      new TaskRunStartHandler(clock),
+      new TaskRunFinishHandler(clock),
+      new TaskSubmitReviewHandler(clock),
+    ],
     ids: gatewayIds(clock),
     digest: semanticCommandDigest,
     now: clock,
@@ -92,6 +131,49 @@ async function main(): Promise<void> {
     candidateLimit: positiveInteger("LEASE_REAPER_CANDIDATE_LIMIT", process.env.LEASE_REAPER_CANDIDATE_LIMIT, 64),
   });
 
+  const runtimeDispatcher = openAIRuntime.enabled
+    ? new RuntimeDispatcher(
+        new PostgresRuntimeCandidateStore(pool, "runtime.openai", clock),
+        new PostgresRuntimeExecutionPolicyResolver(pool, {
+          supportedCommandTypes: ["task.create", "task.submit_review"],
+          maxOutputTokens: openAIRuntime.maxOutputTokens,
+          now: clock,
+        }),
+        new RuntimeManager(
+          new PostgresRuntimeContextProvider(new PostgresContextManifestStore(pool, clock)),
+          new GatewayKernelRuntimePort(
+            commandGateway,
+            new PostgresRuntimeExecutionStateReader(pool),
+            runtimeCommandIds(clock),
+            clock,
+          ),
+          new OpenAIRuntimeAdapter({
+            modelResolver: createOpenAIModelPolicyResolver(
+              openAIRuntime.modelPolicies,
+              openAIRuntime.defaultModel,
+            ),
+          }),
+          clock,
+        ),
+        new DeterministicRuntimeManifestIdSource(),
+        {
+          maxConcurrent: openAIRuntime.maxConcurrent,
+          maxContextTokens: openAIRuntime.maxContextTokens,
+          requiredCompletionCommand: "task.submit_review",
+        },
+      )
+    : undefined;
+
+  if (runtimeDispatcher === undefined) {
+    console.info("OpenAI Runtime dispatch disabled", { enableWith: "RUNTIME_OPENAI_ENABLED=true" });
+  } else {
+    console.info("OpenAI Runtime dispatch enabled", {
+      maxConcurrent: openAIRuntime.maxConcurrent,
+      maxContextTokens: openAIRuntime.maxContextTokens,
+      maxOutputTokens: openAIRuntime.maxOutputTokens,
+    });
+  }
+
   const controller = new AbortController();
   let stopping = false;
   const requestStop = () => {
@@ -103,7 +185,7 @@ async function main(): Promise<void> {
   process.once("SIGINT", requestStop);
 
   try {
-    await Promise.all([
+    const loops: Promise<void>[] = [
       runOutboxLoop({
         worker: outboxWorker,
         signal: controller.signal,
@@ -141,7 +223,49 @@ async function main(): Promise<void> {
         },
         onError: (error) => console.error("Lease recovery cycle failed", error),
       }),
-    ]);
+    ];
+
+    if (runtimeDispatcher !== undefined) {
+      loops.push(
+        runRuntimeDispatcherLoop(runtimeDispatcher, {
+          signal: controller.signal,
+          idleDelayMs: openAIRuntime.idleDelayMs,
+          onOutcomes: (outcomes) => {
+            for (const outcome of outcomes) {
+              if (outcome.status === "executed") {
+                console.info("Runtime execution finished", {
+                  organizationId: outcome.organizationId,
+                  runId: outcome.runId,
+                  status: outcome.report.status,
+                  contextManifestId: outcome.report.contextManifestId,
+                });
+              } else if (outcome.status === "failed") {
+                console.error("Runtime dispatch failed", {
+                  organizationId: outcome.organizationId,
+                  runId: outcome.runId,
+                  reason: outcome.reason,
+                });
+              } else if (outcome.status === "contended") {
+                console.info("Runtime dispatch contention", {
+                  organizationId: outcome.organizationId,
+                  runId: outcome.runId,
+                  reason: outcome.reason,
+                });
+              } else {
+                console.warn("Runtime dispatch skipped", {
+                  organizationId: outcome.organizationId,
+                  runId: outcome.runId,
+                  reason: outcome.reason,
+                });
+              }
+            }
+          },
+          onError: (error) => console.error("Runtime dispatch cycle failed", error),
+        }),
+      );
+    }
+
+    await Promise.all(loops);
   } finally {
     await pool.end();
   }

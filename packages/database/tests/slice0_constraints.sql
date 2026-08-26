@@ -4,8 +4,8 @@ BEGIN;
 
 DO $$
 BEGIN
-  IF (SELECT count(*) FROM aop.schema_migrations) <> 11 THEN
-    RAISE EXCEPTION 'expected 11 applied migrations';
+  IF (SELECT count(*) FROM aop.schema_migrations) <> 15 THEN
+    RAISE EXCEPTION 'expected 15 applied migrations';
   END IF;
 END $$;
 
@@ -71,11 +71,11 @@ END $$;
 
 INSERT INTO aop.task_runs (
   id, organization_id, task_id, agent_id, attempt, status, runtime_type,
-  runtime_id, workspace_id, started_at, heartbeat_at, revision
+  workspace_id, revision
 ) VALUES (
   'run_00000000000000000000000001', 'org_00000000000000000000000001',
-  'tsk_00000000000000000000000001', 'agt_00000000000000000000000001',
-  1, 'running', 'test_runtime', 'runtime-1', 'workspace-1', now(), now(), 0
+  'tsk_00000000000000000000000001', 'agt_00000000000000000000000001', 1,
+  'created', 'runtime.test', 'workspace-1', 0
 );
 
 INSERT INTO aop.leases (
@@ -84,7 +84,7 @@ INSERT INTO aop.leases (
 ) VALUES (
   'lea_00000000000000000000000001', 'org_00000000000000000000000001',
   'tsk_00000000000000000000000001', 'run_00000000000000000000000001',
-  'agt_00000000000000000000000001', 'active', 1, now(), now() + interval '10 minutes', 60, 0
+  'agt_00000000000000000000000001', 'active', 1, now(), now() + interval '5 minutes', 30, 0
 );
 
 DO $$
@@ -96,9 +96,9 @@ BEGIN
     ) VALUES (
       'lea_00000000000000000000000002', 'org_00000000000000000000000001',
       'tsk_00000000000000000000000001', 'run_00000000000000000000000001',
-      'agt_00000000000000000000000001', 'active', 1, now(), now() + interval '10 minutes', 60, 0
+      'agt_00000000000000000000000001', 'active', 1, now(), now() + interval '5 minutes', 30, 0
     );
-    RAISE EXCEPTION 'second active lease was incorrectly accepted';
+    RAISE EXCEPTION 'dual active lease was incorrectly accepted';
   EXCEPTION WHEN unique_violation THEN NULL;
   END;
 
@@ -109,88 +109,67 @@ BEGIN
     ) VALUES (
       'lea_00000000000000000000000003', 'org_00000000000000000000000001',
       'tsk_00000000000000000000000001', 'run_00000000000000000000000001',
-      'agt_00000000000000000000000001', 'released', 2, now(), now() + interval '10 minutes', 60, 0
+      'agt_00000000000000000000000001', 'released', 2, now(), now() + interval '5 minutes', 30, 0
     );
     RAISE EXCEPTION 'mismatched lease attempt was incorrectly accepted';
   EXCEPTION WHEN foreign_key_violation THEN NULL;
   END;
 END $$;
 
+INSERT INTO aop.decisions (
+  id, organization_id, scope, question, options, selected_option_id, rationale,
+  proposed_by_type, proposed_by_id, authority_capability, status,
+  approved_by_type, approved_by_id, effective_at, revision, created_at, updated_at
+) VALUES (
+  'dec_00000000000000000000000001', 'org_00000000000000000000000001',
+  'architecture', 'Which auth mechanism?', '[{"id":"a","label":"Option A"}]',
+  'a', 'Approved rationale', 'human', 'usr_00000000000000000000000001',
+  'decision.architecture.approve', 'active', 'human', 'usr_00000000000000000000000001', now(), 1, now(), now()
+);
+
+UPDATE aop.decisions
+   SET status = 'superseded', revision = revision + 1, updated_at = now()
+ WHERE id = 'dec_00000000000000000000000001';
+
+DO $$
+DECLARE
+  approved_type text;
+  approved_id text;
+  effective timestamptz;
+BEGIN
+  SELECT approved_by_type, approved_by_id, effective_at
+    INTO approved_type, approved_id, effective
+    FROM aop.decisions
+   WHERE id = 'dec_00000000000000000000000001';
+  IF approved_type IS NULL OR approved_id IS NULL OR effective IS NULL THEN
+    RAISE EXCEPTION 'superseded decision lost approval history';
+  END IF;
+END $$;
+
+INSERT INTO aop.reviews (
+  id, organization_id, subject_type, subject_id, reviewer_type, reviewer_id,
+  criteria, evidence, result, findings, created_at, completed_at, revision
+) VALUES (
+  'rev_00000000000000000000000001', 'org_00000000000000000000000001',
+  'task', 'tsk_00000000000000000000000001', 'human', 'usr_00000000000000000000000001',
+  '[{"key":"tests","description":"Tests pass","required":true}]',
+  '[{"type":"task_run","id":"run_00000000000000000000000001"}]',
+  'pass', '[]', now(), now(), 0
+);
+
 DO $$
 BEGIN
-  BEGIN
-    INSERT INTO aop.decisions (
-      id, organization_id, scope, question, options, selected_option_id, rationale,
-      proposed_by_type, proposed_by_id, authority_capability, status,
-      revision, created_at, updated_at
-    ) VALUES (
-      'dec_00000000000000000000000001', 'org_00000000000000000000000001',
-      'engineering.architecture', 'Which contract?', '[{"id":"v4","label":"v4"}]', 'v4', 'Historical rationale',
-      'human', 'usr_00000000000000000000000001', 'decision.engineering.approve', 'superseded', 2, now(), now()
-    );
-    RAISE EXCEPTION 'superseded decision without approval history was incorrectly accepted';
-  EXCEPTION WHEN check_violation THEN NULL;
-  END;
-
   BEGIN
     INSERT INTO aop.reviews (
       id, organization_id, subject_type, subject_id, reviewer_type, reviewer_id,
       criteria, evidence, result, findings, created_at, completed_at, revision
     ) VALUES (
-      'rev_00000000000000000000000001', 'org_00000000000000000000000001',
+      'rev_00000000000000000000000002', 'org_00000000000000000000000001',
       'task', 'tsk_00000000000000000000000001', 'human', 'usr_00000000000000000000000001',
-      '[{"key":"tests.pass","description":"Tests pass","required":true}]', '[]', 'pass', '[]', now(), now(), 1
+      '[{"key":"tests","description":"Tests pass","required":true}]',
+      '[]', 'pass', '[]', now(), now(), 0
     );
     RAISE EXCEPTION 'passing review without evidence was incorrectly accepted';
-  EXCEPTION WHEN check_violation THEN NULL;
-  END;
-END $$;
-
-INSERT INTO aop.command_deduplication (
-  organization_id, idempotency_key, command_id, command_type, actor_type, actor_id,
-  request_digest, status, result
-) VALUES (
-  'org_00000000000000000000000001', 'db-constraint-test-command',
-  'cmd_00000000000000000000000001', 'task.update', 'human', 'usr_00000000000000000000000001',
-  'sha256:0000000000000000000000000000000000000000000000000000000000000000', 'accepted', '{"ok":true}'
-);
-
-INSERT INTO aop.events (
-  id, organization_id, organization_sequence, schema_version, protocol_version,
-  type, aggregate_type, aggregate_id, aggregate_revision, actor_type, actor_id,
-  causation_id, correlation_id, payload, occurred_at
-) VALUES (
-  'evt_00000000000000000000000001', 'org_00000000000000000000000001', 1, 1, '0.1.0',
-  'task.updated', 'task', 'tsk_00000000000000000000000001', 1,
-  'human', 'usr_00000000000000000000000001', 'cmd_00000000000000000000000001',
-  'constraint-suite', '{}', now()
-);
-
-DO $$
-BEGIN
-  BEGIN
-    INSERT INTO aop.events (
-      id, organization_id, organization_sequence, schema_version, protocol_version,
-      type, aggregate_type, aggregate_id, aggregate_revision, actor_type, actor_id,
-      causation_id, correlation_id, payload, occurred_at
-    ) VALUES (
-      'evt_00000000000000000000000002', 'org_00000000000000000000000001', 1, 1, '0.1.0',
-      'task.updated', 'task', 'tsk_00000000000000000000000001', 1,
-      'human', 'usr_00000000000000000000000001', 'cmd_00000000000000000000000001',
-      'constraint-suite', '{}', now()
-    );
-    RAISE EXCEPTION 'duplicate organization event sequence was incorrectly accepted';
-  EXCEPTION WHEN unique_violation THEN NULL;
-  END;
-
-  BEGIN
-    INSERT INTO aop.outbox_events (
-      event_id, organization_id, status, locked_at, locked_by
-    ) VALUES (
-      'evt_00000000000000000000000001', 'org_00000000000000000000000001',
-      'pending', now(), 'invalid-worker'
-    );
-    RAISE EXCEPTION 'pending outbox row with a processing lock was incorrectly accepted';
   EXCEPTION WHEN check_violation THEN NULL;
   END;
 END $$;

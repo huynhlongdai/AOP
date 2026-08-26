@@ -127,8 +127,23 @@ jobs:
       - name: Validate Task QA review lifecycle against PostgreSQL
         run: pnpm exec vitest run packages/database/src/task-review.integration.test.ts
 
+      - name: Validate bounded task.create decomposition against PostgreSQL
+        run: pnpm exec vitest run packages/database/src/task-create.integration.test.ts
+
       - name: Validate Decision authority and supersession against PostgreSQL
         run: pnpm exec vitest run packages/database/src/decision-governance.integration.test.ts
 
       - name: Validate verified organizational reporting against PostgreSQL
         run: pnpm exec vitest run packages/database/src/reporting-store.integration.test.ts
+
+      - name: Validate exact Context Manifest compilation against PostgreSQL
+        run: pnpm exec vitest run packages/database/src/context-manifest-store.integration.test.ts
+
+      - name: Validate authoritative Runtime lifecycle against PostgreSQL
+        run: pnpm exec vitest run packages/database/src/runtime-lifecycle.integration.test.ts
+
+      - name: Validate Runtime Manager control plane against PostgreSQL
+        run: pnpm exec vitest run apps/worker/src/runtime-manager-control-plane.integration.test.ts
+
+      - name: Validate CTO OpenAI decomposition control plane against PostgreSQL
+        run: pnpm exec vitest run apps/worker/src/cto-openai-decomposition.integration.test.ts

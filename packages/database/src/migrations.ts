@@ -10,6 +10,10 @@ export const DATABASE_MIGRATIONS = [
   "0009_artifact_lineage_delete_hardening",
   "0010_task_artifact_input_invalidation",
   "0011_task_review_completion_guard",
+  "0012_context_manifest_integrity",
+  "0013_runtime_run_reports",
+  "0014_context_at_execution_boundary",
+  "0015_task_decomposition",
 ] as const;
 
 export type DatabaseMigration = (typeof DATABASE_MIGRATIONS)[number];

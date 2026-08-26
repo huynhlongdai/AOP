@@ -19,6 +19,10 @@
     "@aop/command-bus": "workspace:*",
     "@aop/database": "workspace:*",
     "@aop/event-bus": "workspace:*",
+    "@aop/policy-engine": "workspace:*",
+    "@aop/protocol": "workspace:*",
+    "@aop/runtime": "workspace:*",
+    "@aop/runtime-openai": "workspace:*",
     "@aop/scheduler": "workspace:*",
     "pg": "^8.23.0"
   },

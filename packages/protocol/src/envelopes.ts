@@ -17,6 +17,7 @@ import { ProtocolVersionSchema } from "./version.js";
 const TimestampSchema = z.iso.datetime({ offset: true });
 const TypeTokenSchema = z.string().min(3).max(160).regex(/^[a-z][a-z0-9_.:-]+$/);
 const ArbitraryObjectSchema = z.record(z.string(), z.unknown());
+const Sha256Schema = z.string().regex(/^sha256:[a-f0-9]{64}$/);
 
 export const EnvelopeSchemaVersionSchema = z.literal(1);
 
@@ -108,6 +109,7 @@ export const ContextFragmentKindSchema = z.enum([
   "policy",
   "identity",
   "role",
+  "authority",
   "goal",
   "task",
   "dependency",
@@ -132,10 +134,27 @@ export const ContextFragmentSchema = z
     mandatory: z.boolean(),
     authorityWeight: z.number().min(0).max(1),
     relevanceWeight: z.number().min(0).max(1),
-    tokenEstimate: z.number().int().nonnegative(),
-    digest: z.string().regex(/^sha256:[a-f0-9]{64}$/).optional(),
+    tokenEstimate: z.number().int().positive(),
+    content: z.string().min(1).max(200_000),
+    digest: Sha256Schema,
   })
-  .strict();
+  .strict()
+  .superRefine((fragment, ctx) => {
+    if (fragment.sourceRevision !== undefined && fragment.source === undefined) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["sourceRevision"],
+        message: "sourceRevision requires a source ResourceRef",
+      });
+    }
+    if (fragment.trust === "untrusted" && fragment.authorityWeight !== 0) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["authorityWeight"],
+        message: "untrusted context cannot carry authority weight",
+      });
+    }
+  });
 
 export const ContextManifestSchema = z
   .object({
@@ -162,7 +181,12 @@ export const ContextManifestSchema = z
       });
     }
 
-    const requiredKinds = new Set(["policy", "identity", "role", "goal", "task", "output_contract"]);
+    const keys = manifest.fragments.map((fragment) => fragment.key);
+    if (new Set(keys).size !== keys.length) {
+      ctx.addIssue({ code: "custom", path: ["fragments"], message: "Context fragment keys must be unique" });
+    }
+
+    const requiredKinds = new Set(["policy", "identity", "role", "authority", "goal", "task", "output_contract"]);
     for (const kind of requiredKinds) {
       if (!manifest.fragments.some((fragment) => fragment.kind === kind && fragment.mandatory)) {
         ctx.addIssue({

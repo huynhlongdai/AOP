@@ -8,9 +8,7 @@ import {
   submitTaskForReview,
 } from "@aop/domain";
 import {
-  LeaseSchema,
   ReviewResolvePayloadSchema,
-  TaskRunSchema,
   TaskSubmitReviewPayloadSchema,
   type ArtifactVersionId,
   type CommandEnvelope,
@@ -37,7 +35,7 @@ export interface TaskReviewTransaction extends CommandTransaction {
     taskId: TaskId,
   ): Promise<readonly ArtifactVersionId[]>;
   lockActiveTaskExecution(organizationId: OrganizationId, taskId: TaskId): Promise<ActiveTaskExecution | undefined>;
-  persistTaskReviewSubmission(task: Task, review: Review, run: TaskRun, lease: Lease): Promise<void>;
+  persistTaskReviewSubmission(task: Task, review: Review): Promise<void>;
   lockReview(organizationId: OrganizationId, reviewId: ReviewId): Promise<Review | undefined>;
   persistReviewResolution(review: Review, task: Task): Promise<void>;
 }
@@ -122,6 +120,13 @@ export class TaskSubmitReviewHandler implements CommandHandler {
 
     const taskId = targetTaskId(command);
     const tx = taskReviewTransaction(transaction);
+
+    // Keep the global coordination lock order Lease -> Run -> Task. Runtime
+    // finish follows the same order, preventing a submit/finish deadlock.
+    const execution = await tx.lockActiveTaskExecution(command.organizationId, taskId);
+    if (execution === undefined) {
+      throw new DomainError("invariant_violation", "Running Task has no active Run and Lease", { taskId });
+    }
     const task = await tx.lockTask(command.organizationId, taskId);
     if (task === undefined) throw new DomainError("not_found", "Task was not found", { taskId });
 
@@ -141,24 +146,26 @@ export class TaskSubmitReviewHandler implements CommandHandler {
         agentId: task.ownerAgentId,
       });
     }
-
-    const staleInputs = await tx.staleRequiredArtifactInputs(command.organizationId, taskId);
-    if (staleInputs.length > 0) {
-      throw new DomainError("invariant_violation", "Task cannot enter review with stale required Artifact inputs", {
-        staleArtifactVersionIds: [...staleInputs],
-      });
-    }
-
-    const execution = await tx.lockActiveTaskExecution(command.organizationId, taskId);
-    if (execution === undefined) {
-      throw new DomainError("invariant_violation", "Running Task has no active Run and Lease", { taskId });
-    }
     if (execution.run.agentId !== command.actor.id || execution.lease.agentId !== command.actor.id) {
       throw new DomainError("invariant_violation", "Active execution is owned by another Agent", {
         taskId,
         runAgentId: execution.run.agentId,
         leaseAgentId: execution.lease.agentId,
         actorAgentId: command.actor.id,
+      });
+    }
+    if (execution.run.status !== "running" || execution.lease.status !== "active") {
+      throw new DomainError("invariant_violation", "Task review submission requires an active running execution", {
+        taskId,
+        runStatus: execution.run.status,
+        leaseStatus: execution.lease.status,
+      });
+    }
+
+    const staleInputs = await tx.staleRequiredArtifactInputs(command.organizationId, taskId);
+    if (staleInputs.length > 0) {
+      throw new DomainError("invariant_violation", "Task cannot enter review with stale required Artifact inputs", {
+        staleArtifactVersionIds: [...staleInputs],
       });
     }
 
@@ -175,19 +182,11 @@ export class TaskSubmitReviewHandler implements CommandHandler {
       findings: [],
       createdAt: now,
     });
-    const run = TaskRunSchema.parse({
-      ...execution.run,
-      status: "succeeded",
-      finishedAt: now,
-      revision: execution.run.revision + 1,
-    });
-    const lease = LeaseSchema.parse({
-      ...execution.lease,
-      status: "released",
-      revision: execution.lease.revision + 1,
-    });
 
-    await tx.persistTaskReviewSubmission(submittedTask, review, run, lease);
+    // Runtime state is intentionally not mutated here. The Runtime Manager owns
+    // TaskRun/Lease lifecycle and will finish the Run after this authoritative
+    // Task transition has committed.
+    await tx.persistTaskReviewSubmission(submittedTask, review);
 
     return {
       resultingRevision: submittedTask.revision,
@@ -197,7 +196,7 @@ export class TaskSubmitReviewHandler implements CommandHandler {
           aggregate: { type: "task", id: taskId },
           aggregateRevision: submittedTask.revision,
           correlationId: command.commandId,
-          payload: { reviewId: review.id, reviewer: review.reviewer, runId: run.id },
+          payload: { reviewId: review.id, reviewer: review.reviewer, runId: execution.run.id },
         },
         {
           type: "review.created",
@@ -205,20 +204,6 @@ export class TaskSubmitReviewHandler implements CommandHandler {
           aggregateRevision: review.revision,
           correlationId: command.commandId,
           payload: { subject: review.subject, reviewer: review.reviewer, criteriaCount: review.criteria.length },
-        },
-        {
-          type: "task_run.succeeded",
-          aggregate: { type: "task_run", id: run.id },
-          aggregateRevision: run.revision,
-          correlationId: command.commandId,
-          payload: { taskId, attempt: run.attempt },
-        },
-        {
-          type: "lease.released",
-          aggregate: { type: "lease", id: lease.id },
-          aggregateRevision: lease.revision,
-          correlationId: command.commandId,
-          payload: { taskId, runId: run.id, reason: "submitted_for_review" },
         },
       ],
     };
@@ -261,6 +246,17 @@ export class ReviewResolveHandler implements CommandHandler {
     await assertEvidenceScope(command, transaction, payload.data.evidence);
 
     const taskId = review.subject.id as TaskId;
+    // Review resolution may not race the active Runtime. Lock any active
+    // execution before the Task so the global Lease -> Run -> Task order holds.
+    const activeExecution = await tx.lockActiveTaskExecution(command.organizationId, taskId);
+    if (activeExecution !== undefined) {
+      throw new DomainError("invariant_violation", "Review cannot resolve before Runtime Manager finishes the active execution", {
+        taskId,
+        runId: activeExecution.run.id,
+        leaseId: activeExecution.lease.id,
+      });
+    }
+
     const task = await tx.lockTask(command.organizationId, taskId);
     if (task === undefined) throw new DomainError("not_found", "Reviewed Task was not found", { taskId });
     if (task.reviewerAgentId === undefined || review.reviewer.type !== "agent" || task.reviewerAgentId !== review.reviewer.id) {
