@@ -4,6 +4,7 @@ import { Pool } from "pg";
 import {
   CommandGateway,
   ReviewResolveHandler,
+  TaskRunFinishHandler,
   TaskSubmitReviewHandler,
   semanticCommandDigest,
   type GatewayIds,
@@ -17,7 +18,7 @@ import {
 } from "@aop/protocol";
 
 import { PostgresAuthorizationResolver } from "./postgres-command-store.js";
-import { PostgresReviewCommandStore } from "./postgres-review-command-store.js";
+import { PostgresRuntimeCommandStore } from "./postgres-runtime-command-store.js";
 
 const DATABASE_URL = process.env.DATABASE_URL;
 const describeDb = DATABASE_URL === undefined ? describe.skip : describe;
@@ -33,6 +34,7 @@ const taskId = `tsk_${ulid(61)}`;
 const runId = `run_${ulid(61)}`;
 const leaseId = `lea_${ulid(61)}`;
 const reviewId = `rev_${ulid(61)}`;
+const manifestId = `ctx_${ulid(61)}`;
 const artifactId = `art_${ulid(61)}`;
 const staleVersionId = `arv_${ulid(61)}`;
 const currentVersionId = `arv_${ulid(62)}`;
@@ -51,9 +53,13 @@ function ids(): GatewayIds {
 function gateway(): CommandGateway {
   if (pool === undefined) throw new Error("DATABASE_URL missing");
   return new CommandGateway({
-    store: new PostgresReviewCommandStore(pool),
+    store: new PostgresRuntimeCommandStore(pool),
     authorization: new PostgresAuthorizationResolver(() => now),
-    handlers: [new TaskSubmitReviewHandler(() => now), new ReviewResolveHandler(() => now)],
+    handlers: [
+      new TaskSubmitReviewHandler(() => now),
+      new TaskRunFinishHandler(() => now),
+      new ReviewResolveHandler(() => now),
+    ],
     ids: ids(),
     digest: semanticCommandDigest,
     now: () => now,
@@ -82,6 +88,33 @@ function submitCommand(suffix = 1): CommandEnvelope {
   });
 }
 
+function finishCommand(suffix: number): CommandEnvelope {
+  return CommandEnvelopeSchema.parse({
+    schemaVersion: 1,
+    protocolVersion: AOP_PROTOCOL_VERSION,
+    commandId: `cmd_${ulid(2_000 + suffix)}`,
+    type: "task_run.finish",
+    organizationId: orgId,
+    actor: { type: "system", id: "runtime-manager" },
+    target: { type: "task_run", id: runId },
+    expectedRevision: 0,
+    idempotencyKey: `task.review.runtime.finish.${suffix}`,
+    payload: {
+      taskExpectedRevision: 1,
+      contextManifestId: manifestId,
+      runtimeId: "runtime-review",
+      adapter: "runtime.test",
+      provider: "test-provider",
+      model: "test-model",
+      status: "succeeded",
+      usage: { inputTokens: 100, outputTokens: 20, toolCalls: 1, costCredits: 0.1 },
+      traceRefs: [{ provider: "test-provider", traceId: `review-run-${suffix}` }],
+      commandOutcomes: [],
+    },
+    issuedAt: now,
+  });
+}
+
 function resolveCommand(
   result: "pass" | "rework" | "fail",
   actorId = reviewerAgentId,
@@ -90,7 +123,7 @@ function resolveCommand(
   return CommandEnvelopeSchema.parse({
     schemaVersion: 1,
     protocolVersion: AOP_PROTOCOL_VERSION,
-    commandId: `cmd_${ulid(1_900 + suffix)}`,
+    commandId: `cmd_${ulid(2_100 + suffix)}`,
     type: "review.resolve",
     organizationId: orgId,
     actor: { type: "agent", id: actorId },
@@ -109,12 +142,25 @@ function resolveCommand(
 
 async function cleanup(): Promise<void> {
   if (pool === undefined) return;
-  // Runtime history intentionally RESTRICTs membership deletion, so test cleanup
-  // follows the same dependency order the Kernel must respect.
   await pool.query("DELETE FROM aop.leases WHERE organization_id = $1", [orgId]);
   await pool.query("DELETE FROM aop.task_runs WHERE organization_id = $1", [orgId]);
   await pool.query("DELETE FROM aop.organizations WHERE id = $1", [orgId]);
   await pool.query("DELETE FROM aop.agents WHERE id = ANY($1::text[])", [[ownerAgentId, reviewerAgentId]]);
+}
+
+function manifestFragments(): readonly Record<string, unknown>[] {
+  const kinds = ["policy", "identity", "role", "authority", "goal", "task", "output_contract"] as const;
+  return kinds.map((kind, index) => ({
+    key: `${kind}:${index}`,
+    kind,
+    trust: "authoritative",
+    mandatory: true,
+    authorityWeight: 1,
+    relevanceWeight: 1,
+    tokenEstimate: 1,
+    content: JSON.stringify({ kind }),
+    digest: checksum(String((index % 9) + 1)),
+  }));
 }
 
 async function seed(): Promise<void> {
@@ -161,9 +207,23 @@ async function seed(): Promise<void> {
   await pool.query(
     `INSERT INTO aop.task_runs (
        id, organization_id, task_id, agent_id, attempt, status, runtime_type,
-       runtime_id, workspace_id, started_at, heartbeat_at, revision
-     ) VALUES ($1,$2,$3,$4,1,'running','runtime.test','runtime-review','workspace-review',$5,$5,0)`,
-    [runId, orgId, taskId, ownerAgentId, now],
+       workspace_id, revision
+     ) VALUES ($1,$2,$3,$4,1,'created','runtime.test','workspace-review',0)`,
+    [runId, orgId, taskId, ownerAgentId],
+  );
+  const fragments = manifestFragments();
+  await pool.query(
+    `INSERT INTO aop.context_manifests (
+       id, organization_id, task_id, run_id, agent_id, task_revision,
+       schema_version, protocol_version, fragments, total_token_estimate, compiled_at
+     ) VALUES ($1,$2,$3,$4,$5,0,1,'0.1.0',$6::jsonb,$7,$8)`,
+    [manifestId, orgId, taskId, runId, ownerAgentId, JSON.stringify(fragments), fragments.length, now],
+  );
+  await pool.query(
+    `UPDATE aop.task_runs
+        SET status = 'running', runtime_id = 'runtime-review', started_at = $2, heartbeat_at = $2
+      WHERE id = $1`,
+    [runId, now],
   );
   await pool.query(
     `INSERT INTO aop.leases (
@@ -177,15 +237,17 @@ async function seed(): Promise<void> {
        id, organization_id, principal_type, principal_id, capability, effect,
        conditions, granted_by_type, granted_by_id, revision, created_at
      ) VALUES
-       ($1,$5,'agent',$6,'task.submit_review','allow','{}','human',$8,0,$9),
-       ($2,$5,'agent',$7,'review.resolve','allow','{}','human',$8,0,$9),
-       ($3,$5,'agent',$6,'review.resolve','allow','{}','human',$8,0,$9),
-       ($4,$5,'human',$8,'review.resolve','allow','{}','human',$8,0,$9)`,
+       ($1,$6,'agent',$7,'task.submit_review','allow','{}','human',$9,0,$10),
+       ($2,$6,'agent',$8,'review.resolve','allow','{}','human',$9,0,$10),
+       ($3,$6,'agent',$7,'review.resolve','allow','{}','human',$9,0,$10),
+       ($4,$6,'human',$9,'review.resolve','allow','{}','human',$9,0,$10),
+       ($5,$6,'system','runtime-manager','task_run.finish','allow','{}','human',$9,0,$10)`,
     [
       `per_${ulid(61)}`,
       `per_${ulid(62)}`,
       `per_${ulid(63)}`,
       `per_${ulid(64)}`,
+      `per_${ulid(65)}`,
       orgId,
       ownerAgentId,
       reviewerAgentId,
@@ -258,7 +320,7 @@ afterAll(async () => {
 });
 
 describeDb("PostgreSQL Task QA review/rework lifecycle", () => {
-  it("releases execution, creates an independent Review, and completes only after passing evidence", async () => {
+  it("requires Runtime finish evidence before independent Review resolution", async () => {
     if (pool === undefined) return;
     const bus = gateway();
 
@@ -268,6 +330,20 @@ describeDb("PostgreSQL Task QA review/rework lifecycle", () => {
       revision: "1",
     });
     expect((await pool.query("SELECT status, revision FROM aop.task_runs WHERE id = $1", [runId])).rows[0]).toEqual({
+      status: "running",
+      revision: "0",
+    });
+    expect((await pool.query("SELECT status, revision FROM aop.leases WHERE id = $1", [leaseId])).rows[0]).toEqual({
+      status: "active",
+      revision: "0",
+    });
+
+    const earlyReview = await bus.execute(resolveCommand("pass", reviewerAgentId, 2));
+    expect(earlyReview.ok).toBe(false);
+    if (!earlyReview.ok) expect(earlyReview.error.code).toBe("invariant_violation");
+
+    expect((await bus.execute(finishCommand(3))).ok).toBe(true);
+    expect((await pool.query("SELECT status, revision FROM aop.task_runs WHERE id = $1", [runId])).rows[0]).toEqual({
       status: "succeeded",
       revision: "1",
     });
@@ -275,13 +351,10 @@ describeDb("PostgreSQL Task QA review/rework lifecycle", () => {
       status: "released",
       revision: "1",
     });
-    expect((await pool.query("SELECT result, reviewer_id, revision FROM aop.reviews WHERE id = $1", [reviewId])).rows[0]).toEqual({
-      result: "pending",
-      reviewer_id: reviewerAgentId,
-      revision: "0",
-    });
+    expect((await pool.query("SELECT count(*)::int AS count FROM aop.runtime_run_reports WHERE run_id = $1", [runId])).rows[0])
+      .toEqual({ count: 1 });
 
-    expect((await bus.execute(resolveCommand("pass"))).ok).toBe(true);
+    expect((await bus.execute(resolveCommand("pass", reviewerAgentId, 4))).ok).toBe(true);
     expect(
       (await pool.query("SELECT state, revision, completed_at IS NOT NULL AS completed FROM aop.tasks WHERE id = $1", [taskId]))
         .rows[0],
@@ -307,11 +380,12 @@ describeDb("PostgreSQL Task QA review/rework lifecycle", () => {
       .toEqual({ count: 6 });
   });
 
-  it("returns review rework to READY without manufacturing completion", async () => {
+  it("returns review rework to READY only after Runtime execution is closed", async () => {
     if (pool === undefined) return;
     const bus = gateway();
     expect((await bus.execute(submitCommand(10))).ok).toBe(true);
-    expect((await bus.execute(resolveCommand("rework", reviewerAgentId, 11))).ok).toBe(true);
+    expect((await bus.execute(finishCommand(11))).ok).toBe(true);
+    expect((await bus.execute(resolveCommand("rework", reviewerAgentId, 12))).ok).toBe(true);
 
     expect(
       (await pool.query("SELECT state, revision, completed_at FROM aop.tasks WHERE id = $1", [taskId])).rows[0],
@@ -328,8 +402,9 @@ describeDb("PostgreSQL Task QA review/rework lifecycle", () => {
     if (pool === undefined) return;
     const bus = gateway();
     expect((await bus.execute(submitCommand(20))).ok).toBe(true);
+    expect((await bus.execute(finishCommand(21))).ok).toBe(true);
 
-    const result = await bus.execute(resolveCommand("pass", ownerAgentId, 21));
+    const result = await bus.execute(resolveCommand("pass", ownerAgentId, 22));
     expect(result.ok).toBe(false);
     if (!result.ok) expect(result.error.code).toBe("forbidden");
     expect((await pool.query("SELECT result, revision FROM aop.reviews WHERE id = $1", [reviewId])).rows[0]).toEqual({
@@ -346,9 +421,10 @@ describeDb("PostgreSQL Task QA review/rework lifecycle", () => {
     if (pool === undefined) return;
     const bus = gateway();
     expect((await bus.execute(submitCommand(30))).ok).toBe(true);
+    expect((await bus.execute(finishCommand(31))).ok).toBe(true);
     await addStaleRequiredInput();
 
-    const result = await bus.execute(resolveCommand("pass", reviewerAgentId, 31));
+    const result = await bus.execute(resolveCommand("pass", reviewerAgentId, 32));
     expect(result.ok).toBe(false);
     if (!result.ok) expect(result.error.code).toBe("invariant_violation");
     expect((await pool.query("SELECT result FROM aop.reviews WHERE id = $1", [reviewId])).rows[0]).toEqual({ result: "pending" });
