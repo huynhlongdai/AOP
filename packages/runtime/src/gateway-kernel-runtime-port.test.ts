@@ -76,7 +76,7 @@ function ids() {
 }
 
 describe("GatewayKernelRuntimePort", () => {
-  it("binds Runtime preparation to current Run revision and system authority", async () => {
+  it("binds Runtime preparation to current Run revision and system authority without Context", async () => {
     const gateway = new FakeGateway();
     const reader = new FakeStateReader();
     const port = new GatewayKernelRuntimePort(gateway, reader, ids(), () => now);
@@ -89,7 +89,6 @@ describe("GatewayKernelRuntimePort", () => {
       adapter: "runtime.test",
       provider: "test-provider",
       model: "test-model",
-      contextManifestId,
       traceRefs: [{ provider: "test-provider", traceId: "prepare-trace" }],
     });
 
@@ -103,12 +102,12 @@ describe("GatewayKernelRuntimePort", () => {
       idempotencyKey: `runtime:${runId}:prepare`,
       payload: {
         runtimeId: "provider-runtime-1",
-        contextManifestId,
         adapter: "runtime.test",
         provider: "test-provider",
         model: "test-model",
       },
     });
+    expect(gateway.envelopes[0]?.payload).not.toHaveProperty("contextManifestId");
   });
 
   it("uses fresh Run and Task revisions when starting", async () => {
@@ -247,6 +246,75 @@ describe("GatewayKernelRuntimePort", () => {
     });
   });
 
+  it("allows failed pre-reasoning finish without inventing Context evidence", async () => {
+    const gateway = new FakeGateway();
+    const reader = new FakeStateReader(
+      state({
+        runStatus: "running",
+        runRevision: 2,
+        runtimeId: "provider-runtime-1",
+        taskState: "running",
+        taskRevision: 2,
+        contextManifestId: undefined,
+      }),
+    );
+    const port = new GatewayKernelRuntimePort(gateway, reader, ids(), () => now);
+
+    await port.recordFinished({
+      organizationId: orgId,
+      runId,
+      agentId,
+      runtimeId: "provider-runtime-1",
+      adapter: "runtime.test",
+      status: "failed",
+      usage: { inputTokens: 0, outputTokens: 0, toolCalls: 0 },
+      traceRefs: [],
+      commandOutcomes: [],
+      failureReason: "Context compilation failed: unavailable",
+    });
+
+    expect(gateway.envelopes[0]).toMatchObject({
+      type: "task_run.finish",
+      payload: {
+        status: "failed",
+        failureReason: "Context compilation failed: unavailable",
+      },
+    });
+    expect(gateway.envelopes[0]?.payload).not.toHaveProperty("contextManifestId");
+  });
+
+  it("rejects a successful finish when no exact Context exists", async () => {
+    const port = new GatewayKernelRuntimePort(
+      new FakeGateway(),
+      new FakeStateReader(
+        state({
+          runStatus: "running",
+          runRevision: 2,
+          runtimeId: "provider-runtime-1",
+          taskState: "review",
+          taskRevision: 3,
+          contextManifestId: undefined,
+        }),
+      ),
+      ids(),
+      () => now,
+    );
+
+    await expect(
+      port.recordFinished({
+        organizationId: orgId,
+        runId,
+        agentId,
+        runtimeId: "provider-runtime-1",
+        adapter: "runtime.test",
+        status: "succeeded",
+        usage: { inputTokens: 1, outputTokens: 1, toolCalls: 0 },
+        traceRefs: [],
+        commandOutcomes: [],
+      }),
+    ).rejects.toThrow(/requires authoritative Context Manifest/);
+  });
+
   it("fails closed when Kernel rejects a lifecycle command", async () => {
     const gateway = new FakeGateway();
     const reader = new FakeStateReader();
@@ -264,7 +332,6 @@ describe("GatewayKernelRuntimePort", () => {
         agentId,
         runtimeId: "provider-runtime-1",
         adapter: "runtime.test",
-        contextManifestId,
         traceRefs: [],
       }),
     ).rejects.toBeInstanceOf(KernelLifecycleCommandError);
