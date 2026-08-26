@@ -12,26 +12,14 @@ import {
   TaskRunIdSchema,
 } from "./ids.js";
 import { ResourceRefSchema } from "./resource-ref.js";
+import {
+  RuntimeCommandOutcomeEvidenceSchema,
+  RuntimeTraceRefSchema,
+  RuntimeUsageSchema,
+} from "./runtime-report.js";
 
 const CapabilityTokenSchema = z.string().min(2).max(128).regex(/^[a-z][a-z0-9_.:-]+$/);
 const Sha256Schema = z.string().regex(/^sha256:[a-f0-9]{64}$/);
-
-const RuntimeTraceRefInputSchema = z
-  .object({
-    provider: z.string().trim().min(1).max(80),
-    traceId: z.string().trim().min(1).max(240),
-    spanId: z.string().trim().min(1).max(240).optional(),
-  })
-  .strict();
-
-const RuntimeUsageInputSchema = z
-  .object({
-    inputTokens: z.number().int().nonnegative(),
-    outputTokens: z.number().int().nonnegative(),
-    toolCalls: z.number().int().nonnegative(),
-    costCredits: z.number().nonnegative().optional(),
-  })
-  .strict();
 
 const ArtifactContentInputSchema = z
   .object({
@@ -114,7 +102,7 @@ export const TaskRunPreparePayloadSchema = z
     adapter: CapabilityTokenSchema,
     provider: z.string().trim().min(1).max(80).optional(),
     model: z.string().trim().min(1).max(160).optional(),
-    traceRefs: z.array(RuntimeTraceRefInputSchema).max(128).default([]),
+    traceRefs: z.array(RuntimeTraceRefSchema).max(128).default([]),
   })
   .strict();
 
@@ -127,9 +115,15 @@ export const TaskRunStartPayloadSchema = z
 export const TaskRunFinishPayloadSchema = z
   .object({
     taskExpectedRevision: z.number().int().nonnegative(),
+    contextManifestId: ContextManifestIdSchema,
+    runtimeId: z.string().trim().min(1).max(240),
+    adapter: CapabilityTokenSchema,
+    provider: z.string().trim().min(1).max(80).optional(),
+    model: z.string().trim().min(1).max(160).optional(),
     status: z.enum(["succeeded", "failed", "cancelled"]),
-    usage: RuntimeUsageInputSchema,
-    traceRefs: z.array(RuntimeTraceRefInputSchema).max(256).default([]),
+    usage: RuntimeUsageSchema,
+    traceRefs: z.array(RuntimeTraceRefSchema).max(256).default([]),
+    commandOutcomes: z.array(RuntimeCommandOutcomeEvidenceSchema).max(256).default([]),
     failureReason: z.string().trim().min(1).max(2_000).optional(),
   })
   .strict()
